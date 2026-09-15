@@ -1,2 +1,2 @@
-# AI_comtent_creator
+# AI_content_creator
 Content creator agent.
