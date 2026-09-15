@@ -104,9 +104,35 @@ function validateWorkflow(graph, options = {}) {
   if (!nodes.length) {
     return {ok: false, problem: 'The workflow file contains no nodes. Export the API workflow from ComfyUI and save that file.'};
   }
-  const node = String(options.promptNode === undefined || options.promptNode === null ? '' : options.promptNode);
+
+  /* The prompt node is optional. A ComfyUI text-to-image graph nearly always has exactly one text
+     encoder, and asking an operator to hunt for its node id is friction for no benefit. The rule is
+     deliberately strict: one unambiguous match, or a refusal that names the candidates. Anything
+     cleverer would silently write the prompt into the wrong node, which is worse than asking. */
+  const field0 = String(options.promptField || 'text');
+  let node = String(options.promptNode === undefined || options.promptNode === null ? '' : options.promptNode);
+  let autoDetected = false;
   if (!node) {
-    return {ok: false, problem: 'No prompt node is configured for this workflow. Set prompt_node in workflows.json to the node id that takes the text.', nodes};
+    const candidates = nodes.filter(item => /textencode|text_encode|cliptext/i.test(item.class_type)
+      && graph[item.id] && graph[item.id].inputs && hasOwn(graph[item.id].inputs, field0));
+    if (candidates.length === 1) {
+      node = candidates[0].id;
+      autoDetected = true;
+    } else if (candidates.length > 1) {
+      return {
+        ok: false, nodes,
+        problem: 'This workflow has ' + candidates.length + ' text nodes, so the prompt cannot be placed automatically: '
+          + candidates.map(item => item.id + ' (' + item.class_type + ')').join(', ')
+          + '. Set prompt_node in workflows.json to the positive one.'
+      };
+    } else {
+      return {
+        ok: false, nodes,
+        problem: 'No prompt node is configured and none could be found automatically. Expected a text-encoding node with an "'
+          + field0 + '" input. The workflow contains: ' + nodes.map(item => item.id + ' (' + item.class_type + ')').join(', ')
+          + '. Set prompt_node in workflows.json to the node that takes the text.'
+      };
+    }
   }
   if (!hasOwn(graph, node)) {
     return {
@@ -116,7 +142,7 @@ function validateWorkflow(graph, options = {}) {
         + nodes.map(item => item.id + ' (' + item.class_type + ')').join(', ') + '.'
     };
   }
-  const field = String(options.promptField || 'text');
+  const field = field0;
   const inputs = graph[node] && graph[node].inputs;
   if (!inputs || typeof inputs !== 'object') {
     return {ok: false, nodes, problem: 'Node "' + node + '" has no inputs object, so the prompt cannot be placed in it.'};
@@ -129,7 +155,7 @@ function validateWorkflow(graph, options = {}) {
         + '". It has: ' + Object.keys(inputs).join(', ') + '. Set prompt_field in workflows.json.'
     };
   }
-  return {ok: true, nodes, promptNode: node, promptField: field};
+  return {ok: true, nodes, promptNode: node, promptField: field, autoDetected};
 }
 
 /* Returns a copy with the prompt in place. The file on disk is never rewritten, so the operator

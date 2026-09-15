@@ -177,6 +177,31 @@ async function testPureFunctions() {
   assert.match(wrongField.problem, /no input "text"/);
   assert.match(wrongField.problem, /seed/);
 
+  /* The prompt node is optional: with exactly one text encoder it is found, and the rule refuses
+     rather than guessing when the graph is ambiguous. Writing a prompt into the wrong node would be
+     worse than asking. */
+  const auto = comfy.validateWorkflow(API_WORKFLOW, {});
+  assert.equal(auto.ok, true, 'a lone text encoder must be found without configuration');
+  assert.equal(auto.promptNode, '6');
+  assert.equal(auto.autoDetected, true);
+
+  const twoEncoders = {
+    '3': {class_type: 'KSampler', inputs: {seed: 1}},
+    '6': {class_type: 'CLIPTextEncode', inputs: {text: ''}},
+    '7': {class_type: 'CLIPTextEncode', inputs: {text: ''}}
+  };
+  const ambiguous = comfy.validateWorkflow(twoEncoders, {});
+  assert.equal(ambiguous.ok, false, 'two text encoders must not be guessed between');
+  assert.match(ambiguous.problem, /2 text nodes/);
+  assert.match(ambiguous.problem, /6 \(CLIPTextEncode\), 7 \(CLIPTextEncode\)/);
+  assert.match(ambiguous.problem, /positive one/);
+
+  const noEncoder = {'3': {class_type: 'KSampler', inputs: {seed: 1}}, '9': {class_type: 'SaveImage', inputs: {images: ['8', 0]}}};
+  const none = comfy.validateWorkflow(noEncoder, {});
+  assert.equal(none.ok, false);
+  assert.match(none.problem, /none could be found automatically/);
+  assert.match(none.problem, /KSampler/, 'the refusal must list what the workflow does contain');
+
   const uiVerdict = comfy.validateWorkflow(uiFormat, {promptNode: '1'});
   assert.equal(uiVerdict.ok, false);
   assert.match(uiVerdict.problem, /Export \(API\)/, 'the refusal must say how to export correctly');
@@ -219,8 +244,28 @@ async function testWorkflowConfig() {
     assert.equal(loaded.default, 'image', 'a lone image workflow becomes the default');
     assert.equal(loaded.workflows[0].exists, false, 'a missing workflow file must be reported, not assumed');
 
+    /* A config file is not a workflow. Before the file exists the app must not claim Comfy is ready,
+       or the pipeline would start and fail at the first scene. */
+    const beforeFile = comfyWorkflows.workflowSummary(root);
+    assert.equal(beforeFile.configured, false, 'a config pointing at a missing file is not configured');
+    assert.match(beforeFile.problem, /No exported workflow file was found/);
+    assert.match(beforeFile.problem, /a\.json/, 'the message must name the file it expects');
+
     writeJson(path.join(root, '_settings/comfy/a.json'), API_WORKFLOW);
     assert.equal(comfyWorkflows.loadConfig(root).workflows[0].exists, true);
+    const afterFile = comfyWorkflows.workflowSummary(root);
+    assert.equal(afterFile.configured, true);
+    assert.equal(afterFile.problem, null, 'a present default workflow leaves nothing to report');
+
+    // A default that is missing is named even when another workflow is usable.
+    writeJson(path.join(root, '_settings/comfy/workflows.json'), {version: 1, default: 'video', workflows: {
+      image: {file: 'a.json', output: 'image'},
+      video: {file: 'b.json', output: 'video'}
+    }});
+    const missingDefault = comfyWorkflows.workflowSummary(root);
+    assert.equal(missingDefault.configured, true, 'the usable workflow still counts');
+    assert.match(missingDefault.problem, /default workflow "video"/);
+    assert.match(missingDefault.problem, /b\.json/);
 
     const built = comfyWorkflows.buildSubmission({projectsRoot: root, name: 'image', prompt: 'a bench'});
     assert.equal(built.graph['6'].inputs.text, 'a bench');

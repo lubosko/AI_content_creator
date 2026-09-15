@@ -86,9 +86,22 @@ function loadConfig(projectsRoot) {
 function workflowSummary(projectsRoot) {
   const loaded = loadConfig(projectsRoot);
   if (!loaded.ok) return {configured: false, problem: loaded.problem, path: loaded.path, workflows: [], base_url: null};
+  /* A config file is not a workflow. Reporting `configured: true` for one that points at a file which
+     does not exist would let the pipeline start and fail at the first scene, and would offer a
+     generation the app cannot deliver. So usability is decided by the files, not by the config. */
+  const usable = loaded.workflows.filter(item => item.exists);
+  const fallback = loaded.workflows.find(item => item.name === loaded.default);
+  let problem = null;
+  if (!usable.length) {
+    problem = 'No exported workflow file was found. Save your ComfyUI export (Workflow then Export (API)) as '
+      + loaded.workflows.map(item => item.path).join(' or ') + '.';
+  } else if (fallback && !fallback.exists) {
+    problem = 'The default workflow "' + loaded.default + '" points at ' + fallback.path
+      + ', which is missing. Save your exported workflow there, or change "default" in workflows.json.';
+  }
   return {
-    configured: true,
-    problem: null,
+    configured: usable.length > 0,
+    problem,
     path: loaded.path,
     default: loaded.default,
     base_url: (loaded.config && loaded.config.base_url) || null,

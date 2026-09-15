@@ -47,18 +47,22 @@ projects/_settings/comfy/
   "version": 1,
   "default": "image",
   "workflows": {
-    "image": { "file": "image.workflow.json", "output": "image",
-               "prompt_node": "6", "prompt_field": "text", "output_node": null },
-    "video": { "file": "video.workflow.json", "output": "video",
-               "prompt_node": "6", "prompt_field": "text", "output_node": null,
-               "uses_api_nodes": true }
+    "image": { "file": "image.workflow.json", "output": "image" },
+    "video": { "file": "video.workflow.json", "output": "video", "uses_api_nodes": true }
   }
 }
 ```
 
-- `prompt_node` is the node id the scene prompt is written into; `prompt_field` defaults to `text`.
-  A node id that is not in the file is refused, and the refusal lists the ids and `class_type`s the
-  file does contain, so the fix is obvious.
+**`prompt_node` is optional.** With exactly one text-encoding node in the graph, the app finds it, so
+the smallest working config is a `file` and an `output`. Set it explicitly when the graph has more than
+one text encoder — the positive and the negative prompt — because the app refuses to guess between them
+rather than risk writing your prompt into the wrong node:
+
+```json
+{ "file": "image.workflow.json", "output": "image", "prompt_node": "6", "prompt_field": "text" }
+```
+
+- `prompt_field` defaults to `text`.
 - `output` is `image` or `video`, and decides which media output is kept.
 - `output_node` picks one output when a workflow saves several. Otherwise the first media output wins
   and the rest are recorded as skipped.
@@ -66,6 +70,13 @@ projects/_settings/comfy/
   detected**: the app cannot reliably tell an API node from a custom one, and guessing would either
   withhold a key the workflow needs or send one it does not. When true, the same key is forwarded in
   `extra_data.api_key_comfy_org`.
+
+A node id that is not in the file is refused, and the refusal lists the ids and `class_type`s the file
+does contain, so the fix is obvious.
+
+**A config file is not a workflow.** Until the file it names actually exists, the app reports Comfy as
+not configured and names the path it is looking for, rather than offering a generation it cannot
+deliver.
 
 Nothing here rewrites your file. The prompt is injected into a copy in memory.
 

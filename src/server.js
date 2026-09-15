@@ -307,7 +307,11 @@ function createServer(options = {}) {
     const baseUrl = process.env.COMFY_BASE_URL || configured.base_url || comfy.DEFAULT_BASE_URL;
     return {
       provider: 'comfy',
+      // `configured` is about the credential, which is what Settings acts on. Whether a workflow can
+      // actually run is a separate question, answered by `workflow_ready`, because a config file that
+      // names a missing workflow is not a working setup.
       configured: !credential.error && !!credential.key,
+      workflow_ready: configured.configured === true,
       key_source: credential.source,
       error: credential.error || null,
       base_url: baseUrl,

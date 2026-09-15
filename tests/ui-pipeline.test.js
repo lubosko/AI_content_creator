@@ -151,6 +151,23 @@ async function run() {
     // The scene drawn locally must not be offered a paid generation.
     assert.equal(ui.byId('comfy-workflow-scene_one'), null, 'a scene with a template is not offered generation');
 
+    /* A workflows.json that names a file which is not there is not a working setup: the panel must say
+       so rather than offering a generation the app cannot deliver. */
+    const configOnly = {version: 1, default: 'image', workflows: {image: {file: 'image.workflow.json', output: 'image'}}};
+    const workflowFile = path.join(projectsRoot, '_settings/comfy/image.workflow.json');
+    const saved = fs.readFileSync(workflowFile, 'utf8');
+    fs.rmSync(workflowFile);
+    ui.navigate('#/project/' + encodeURIComponent(built.folder) + '/brief');
+    await ui.settle(() => !!ui.document.getElementById('viewBody'), {description: 'a different screen', timeout: 8000});
+    ui.navigate('#/project/' + encodeURIComponent(built.folder) + '/storyboard');
+    await ui.settle(() => ui.text(ui.document.getElementById('viewBody')).indexOf('No exported workflow is in place') >= 0,
+      {description: 'the panel to report the missing workflow file', timeout: 8000});
+    const missingText = ui.text(ui.document.getElementById('viewBody'));
+    assert.ok(missingText.indexOf('image.workflow.json') >= 0, 'the message must name the file it expects');
+    assert.equal(ui.byId('comfy-workflow-scene_two'), null, 'no generation may be offered without a workflow file');
+    void configOnly;
+    fs.writeFileSync(workflowFile, saved, 'utf8');
+
     // --- the pipeline screen ---
     ui.navigate(ui.window.Router.pipelineHref(built.folder));
     await ui.settle(() => ui.text(ui.document.getElementById('viewBody')).indexOf('What this does') >= 0, {description: 'the pipeline screen', timeout: 8000});

@@ -698,6 +698,14 @@
           'Settings stores the key; the workflow you export from ComfyUI goes in ' + (provider.workflow_config_path || 'projects/_settings/comfy/workflows.json') + '. Without it, use a local template, stock sourcing, or attach a file you generated elsewhere.'));
         return;
       }
+      /* The key and the workflow are two different things. A config that names a workflow file which
+         is not there is not a working setup, so it must not offer a generation it cannot deliver. */
+      if (!provider.workflow_ready) {
+        statusLine.textContent = 'Comfy has no usable workflow, so nothing can be generated here.';
+        controls.append(C.banner('warn', 'No exported workflow is in place',
+          provider.workflow_problem || 'Export your ComfyUI workflow with Workflow then Export (API) and save it beside workflows.json.'));
+        return;
+      }
       if (!provider.workflows || !provider.workflows.length) {
         statusLine.textContent = 'No Comfy workflow is configured, so nothing can be generated here.';
         controls.append(C.banner('warn', 'No workflow is configured', provider.workflow_problem || 'Add workflows.json beside your exported API workflow.'));
