@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Social Content Agent</title>
+<link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+<a class="skip-link" href="#workspace">Skip to workspace</a>
+<div class="shell">
+  <aside class="rail" aria-label="Workflow stages">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">SC</span>
+      <span class="brand-text">
+        <strong>Social Content Agent</strong>
+        <span class="brand-sub" id="railSubtitle">No project open</span>
+      </span>
+    </div>
+    <div class="rail-actions">
+      <button class="btn ghost block" type="button" id="goPicker">Projects</button>
+      <button class="btn ghost block" type="button" id="goPipeline" disabled>Run to final check</button>
+      <button class="btn ghost block" type="button" id="goSettings">Settings</button>
+      <button class="btn ghost block" type="button" id="goLibrary">Library</button>
+    </div>
+    <nav class="rail-stages" id="railStages" aria-label="Project stages"></nav>
+    <p class="rail-note" id="railNote" hidden></p>
+  </aside>
+
+  <main class="main" id="workspace" tabindex="-1">
+    <header class="main-head">
+      <div class="main-head-text">
+        <p class="eyebrow" id="viewEyebrow">Projects</p>
+        <h1 id="viewTitle">Your projects</h1>
+        <p class="view-sub" id="viewSub"></p>
+      </div>
+      <div class="main-head-actions" id="viewActions"></div>
+    </header>
+    <div class="main-body" id="viewBody" role="region" aria-live="polite"></div>
+  </main>
+
+  <aside class="inspector" id="inspector" aria-label="Project details" hidden>
+    <header class="inspector-head">
+      <h2>Project details</h2>
+      <button class="icon-btn" type="button" id="inspectorToggle" aria-label="Hide project details">&#215;</button>
+    </header>
+    <div class="inspector-body" id="inspectorBody"></div>
+  </aside>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="/ui/stages.js"></script>
+<script src="/ui/dom.js"></script>
+<script src="/ui/components.js"></script>
+<script src="/ui/api.js"></script>
+<script src="/ui/store.js"></script>
+<script src="/ui/router.js"></script>
+<script src="/ui/views/project.js"></script>
+<script src="/ui/views/brief.js"></script>
+<script src="/ui/views/material.js"></script>
+<script src="/ui/views/library.js"></script>
+<script src="/ui/views/stage.js"></script>
+<script src="/ui/views/delivery.js"></script>
+<script src="/ui/views/pipeline.js"></script>
+<script src="/ui/views/settings.js"></script>
+<script src="/ui/app.js"></script>
+</body>
+</html>

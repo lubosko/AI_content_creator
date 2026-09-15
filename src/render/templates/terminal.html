@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>terminal</title><style>/*__STYLES__*/</style></head>
+<body>
+<div id="stage">
+  <div class="terminal">
+    <div class="term-bar">
+      <span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span>
+      <span class="term-title" id="term-title"></span>
+    </div>
+    <div class="term-body" id="fit"><div id="term-lines"></div></div>
+  </div>
+  <div class="footnote" id="footnote"></div>
+</div>
+<script>/*__SCENE__*/</script>
+<script>/*__RUNTIME__*/</script>
+<script>
+(function () {
+  'use strict';
+  var lines = [];
+  window.build = function (scene) {
+    var data = scene.data || {};
+    var input = Array.isArray(data.lines) ? data.lines : [];
+    if (!input.length) input = String(scene.text || 'terminal').split(/\r?\n/);
+    document.getElementById('term-title').textContent = data.title || scene.eyebrow || '';
+    if (data.footnote) document.getElementById('footnote').textContent = data.footnote;
+
+    var host = document.getElementById('term-lines');
+    input.forEach(function (entry) {
+      var source = typeof entry === 'string' ? {text: entry} : (entry || {});
+      var text = String(source.text === undefined ? '' : source.text);
+      var row = window.R.el('div', 'term-line');
+      if (source.prompt) row.appendChild(window.R.el('span', 'term-prompt', source.prompt + ' '));
+      var typed = window.R.el('span', 'term-text', '');
+      row.appendChild(typed);
+      host.appendChild(row);
+      lines.push({node: typed, text: text});
+    });
+  };
+
+  window.renderFrame = function (n) {
+    var total = window.frameCount;
+    var start = Math.max(1, Math.round(total * 0.08));
+    var span = Math.max(6, Math.round(total * 0.62 / Math.max(1, lines.length)));
+    var step = Math.max(2, Math.round(span * 0.72));
+    lines.forEach(function (line, i) {
+      var p = window.R.ease(window.R.span(n, start + i * step, span));
+      var shown = Math.round(line.text.length * p);
+      line.node.textContent = line.text.slice(0, shown);
+    });
+  };
+})();
+</script>
+</body>
+</html>

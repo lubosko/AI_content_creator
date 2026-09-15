@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>diagram</title><style>/*__STYLES__*/</style></head>
+<body>
+<div id="stage">
+  <div class="eyebrow" id="eyebrow"></div>
+  <div class="diagram" id="diagram"></div>
+  <div class="footnote" id="footnote"></div>
+</div>
+<script>/*__SCENE__*/</script>
+<script>/*__RUNTIME__*/</script>
+<script>
+(function () {
+  'use strict';
+  var nodes = [];
+  var edges = [];
+  window.build = function (scene) {
+    var data = scene.data || {};
+    var nodeInput = Array.isArray(data.nodes) ? data.nodes : [];
+    if (!nodeInput.length) nodeInput = [{label: String(scene.text || 'Node'), x: 50, y: 50}];
+    if (scene.eyebrow) document.getElementById('eyebrow').textContent = scene.eyebrow;
+    if (data.footnote) document.getElementById('footnote').textContent = data.footnote;
+
+    var host = document.getElementById('diagram');
+    var elements = [];
+    nodeInput.forEach(function (node) {
+      var el = window.R.el('div', 'node', node && node.label !== undefined ? node.label : '');
+      el.style.left = window.R.num(node && node.x, 50) + '%';
+      el.style.top = window.R.num(node && node.y, 50) + '%';
+      host.appendChild(el);
+      elements.push(el);
+      nodes.push(el);
+    });
+
+    /* Edges are measured after the nodes are in the document, so the line actually joins the two
+       boxes instead of guessing at their size. */
+    var box = host.getBoundingClientRect();
+    (Array.isArray(data.edges) ? data.edges : []).forEach(function (pair) {
+      var from = elements[Number(pair && pair[0])];
+      var to = elements[Number(pair && pair[1])];
+      if (!from || !to) return;
+      var a = from.getBoundingClientRect();
+      var b = to.getBoundingClientRect();
+      var ax = a.left - box.left + a.width / 2;
+      var ay = a.top - box.top + a.height / 2;
+      var bx = b.left - box.left + b.width / 2;
+      var by = b.top - box.top + b.height / 2;
+      var dx = bx - ax, dy = by - ay;
+      var line = window.R.el('div', 'edge');
+      line.style.left = ax + 'px';
+      line.style.top = ay + 'px';
+      line.style.width = Math.sqrt(dx * dx + dy * dy).toFixed(2) + 'px';
+      host.appendChild(line);
+      edges.push({node: line, angle: Math.atan2(dy, dx) * 180 / Math.PI});
+    });
+  };
+
+  window.renderFrame = function (n) {
+    var total = window.frameCount;
+    var start = Math.max(1, Math.round(total * 0.08));
+    var span = Math.max(4, Math.round(total * 0.4 / Math.max(1, nodes.length)));
+    var step = Math.max(2, Math.round(span * 0.85));
+    nodes.forEach(function (el, i) {
+      var at = start + i * step;
+      window.R.reveal(el, window.R.span(n, at, span), {distance: 0});
+      var grow = 0.92 + 0.08 * window.R.ease(window.R.span(n, at, span));
+      el.style.transform = 'translate(-50%, -50%) scale(' + grow.toFixed(3) + ')';
+    });
+    /* Each edge draws once the node it leaves from has appeared. */
+    var edgesStart = start + nodes.length * step;
+    var edgeSpan = Math.max(4, Math.round(total * 0.45 / Math.max(1, edges.length)));
+    edges.forEach(function (edge, i) {
+      var p = window.R.ease(window.R.span(n, edgesStart + i * Math.round(edgeSpan * 0.6), edgeSpan));
+      edge.node.style.opacity = String(p);
+      edge.node.style.transform = 'rotate(' + edge.angle.toFixed(3) + 'deg) scaleX(' + p.toFixed(3) + ')';
+    });
+  };
+})();
+</script>
+</body>
+</html>

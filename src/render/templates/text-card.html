@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>text card</title><style>/*__STYLES__*/</style></head>
+<body>
+<div id="stage">
+  <div class="eyebrow" id="eyebrow"></div>
+  <div id="fit"><div class="headline" id="headline"></div></div>
+  <div class="subline" id="subline"></div>
+  <div class="footnote" id="footnote"></div>
+</div>
+<script>/*__SCENE__*/</script>
+<script>/*__RUNTIME__*/</script>
+<script>
+(function () {
+  'use strict';
+  var parts = [];
+  window.build = function (scene) {
+    var text = String(scene.text || '').trim() || 'Untitled scene';
+    var head = document.getElementById('headline');
+    var reveal = (scene.options && scene.options.reveal) || 'fade';
+    if (scene.eyebrow) document.getElementById('eyebrow').textContent = scene.eyebrow;
+    if (scene.subtext) document.getElementById('subline').textContent = scene.subtext;
+    if (scene.footnote) document.getElementById('footnote').textContent = scene.footnote;
+
+    if (reveal === 'words') {
+      text.split(/\s+/).forEach(function (word) {
+        var span = window.R.el('span', 'word', word);
+        head.appendChild(span);
+        parts.push(span);
+      });
+    } else if (reveal === 'lines') {
+      text.split(/\r?\n/).filter(function (line) { return line.trim(); }).forEach(function (line) {
+        var div = window.R.el('div', 'word', line);
+        head.appendChild(div);
+        parts.push(div);
+      });
+    } else {
+      head.textContent = text;
+      parts.push(head);
+    }
+    ['eyebrow', 'subline', 'footnote'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el && el.textContent) parts.push(el);
+    });
+  };
+
+  window.renderFrame = function (n) {
+    var total = window.frameCount;
+    var start = Math.max(1, Math.round(total * 0.10));
+    // Everything must finish revealing by 65% of the scene so the last third holds still.
+    var span = Math.max(3, Math.round(total * 0.55 / Math.max(1, parts.length)));
+    var step = Math.max(1, Math.round(span * 0.55));
+    parts.forEach(function (el, i) {
+      window.R.reveal(el, window.R.span(n, start + i * step, span), {distance: 16});
+    });
+  };
+})();
+</script>
+</body>
+</html>

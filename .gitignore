@@ -1,0 +1,18 @@
+# Your work: projects, the material library, and the settings file that holds your sealed API keys.
+# This single line is what keeps credentials out of the repository, so do not narrow it.
+projects/
+
+# Credentials given through the environment instead of Settings.
+.env
+!.env.example
+
+# Test output: screenshots written by the browser suites.
+test-results/
+
+# Build output from `npm run dist`.
+dist/
+
+node_modules/
+*.tmp
+.DS_Store
+Thumbs.db

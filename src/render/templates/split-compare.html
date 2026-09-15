@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>split compare</title><style>/*__STYLES__*/</style></head>
+<body>
+<div id="stage">
+  <div class="eyebrow" id="eyebrow"></div>
+  <div class="split">
+    <div class="panel">
+      <h3 id="left-label"></h3>
+      <div class="panel-body" id="fit"><span id="left-text"></span></div>
+    </div>
+    <div class="panel right">
+      <h3 id="right-label"></h3>
+      <div class="panel-body"><span id="right-text"></span></div>
+    </div>
+  </div>
+  <div class="footnote" id="footnote"></div>
+  <div class="badge" id="badge" hidden></div>
+</div>
+<script>/*__SCENE__*/</script>
+<script>/*__RUNTIME__*/</script>
+<script>
+(function () {
+  'use strict';
+  var halves = [];
+  window.build = function (scene) {
+    var data = scene.data || {};
+    var left = data.left || {};
+    var right = data.right || {};
+    if (scene.eyebrow) document.getElementById('eyebrow').textContent = scene.eyebrow;
+    if (data.footnote) document.getElementById('footnote').textContent = data.footnote;
+
+    document.getElementById('left-label').textContent = left.label === undefined ? '' : left.label;
+    document.getElementById('right-label').textContent = right.label === undefined ? '' : right.label;
+    var leftText = document.getElementById('left-text');
+    var rightText = document.getElementById('right-text');
+    leftText.textContent = left.text === undefined ? String(scene.text || '') : String(left.text);
+    rightText.textContent = right.text === undefined ? '' : String(right.text);
+
+    var leftLabel = document.getElementById('left-label');
+    var rightLabel = document.getElementById('right-label');
+    var leftBody = leftText.parentNode;
+    var rightBody = rightText.parentNode;
+    // Exactly one element can carry the fit box, so the longer side gets it: that is the side at
+    // risk of overflowing, and the other is short by comparison.
+    if (String(rightText.textContent).length > String(leftText.textContent).length) {
+      leftBody.removeAttribute('id');
+      rightBody.id = 'fit';
+    }
+    halves.push({node: leftLabel, at: 0});
+    halves.push({node: leftBody, at: 1});
+    halves.push({node: rightLabel, at: 2});
+    halves.push({node: rightBody, at: 3});
+
+    if (data.badge) {
+      var badge = document.getElementById('badge');
+      badge.textContent = String(data.badge);
+      badge.hidden = false;
+      halves.push({node: badge, at: 4});
+    }
+  };
+
+  window.renderFrame = function (n) {
+    var total = window.frameCount;
+    var start = Math.max(1, Math.round(total * 0.12));
+    var span = Math.max(4, Math.round(total * 0.22));
+    var step = Math.max(2, Math.round(span * 0.8));
+    halves.forEach(function (half) {
+      window.R.reveal(half.node, window.R.span(n, start + half.at * step, span), {distance: 14});
+    });
+  };
+})();
+</script>
+</body>
+</html>

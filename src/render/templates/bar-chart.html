@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>bar chart</title><style>/*__STYLES__*/</style></head>
+<body>
+<div id="stage">
+  <div class="eyebrow" id="eyebrow"></div>
+  <div class="bars" id="bars"></div>
+  <div class="footnote" id="footnote"></div>
+</div>
+<script>/*__SCENE__*/</script>
+<script>/*__RUNTIME__*/</script>
+<script>
+(function () {
+  'use strict';
+  var rows = [];
+  window.build = function (scene) {
+    var data = scene.data || {};
+    var bars = Array.isArray(data.bars) ? data.bars : [];
+    if (!bars.length) bars = [{label: 'A', value: 1}, {label: 'B', value: 2}];
+    if (scene.eyebrow) document.getElementById('eyebrow').textContent = scene.eyebrow;
+    if (data.footnote) document.getElementById('footnote').textContent = data.footnote;
+
+    var max = window.R.num(data.max, 0);
+    if (!max) max = bars.reduce(function (top, bar) { return Math.max(top, window.R.num(bar.value, 0)); }, 0);
+    if (!max) max = 1;
+
+    var host = document.getElementById('bars');
+    bars.forEach(function (bar, index) {
+      var row = window.R.el('div', 'bar-row');
+      row.appendChild(window.R.el('div', 'bar-label', bar.label === undefined ? '' : bar.label));
+      var track = window.R.el('div', 'bar-track');
+      var fill = window.R.el('div', 'bar-fill');
+      if (bar.color) fill.style.background = String(bar.color);
+      track.appendChild(fill);
+      row.appendChild(track);
+      var valueText = bar.display !== undefined && bar.display !== null ? bar.display : String(window.R.num(bar.value, 0));
+      var value = window.R.el('div', 'bar-value', valueText);
+      row.appendChild(value);
+      host.appendChild(row);
+      rows.push({fill: fill, value: value, ratio: Math.max(0, window.R.num(bar.value, 0)) / max, index: index});
+    });
+  };
+
+  window.renderFrame = function (n) {
+    var total = window.frameCount;
+    var start = Math.max(1, Math.round(total * 0.12));
+    var span = Math.max(4, Math.round(total * 0.5 / Math.max(1, rows.length)));
+    var step = Math.max(1, Math.round(span * 0.5));
+    rows.forEach(function (row) {
+      var p = window.R.ease(window.R.span(n, start + row.index * step, span));
+      row.fill.style.width = (row.ratio * p * 100).toFixed(3) + '%';
+      window.R.reveal(row.value, window.R.span(n, start + row.index * step + span - 2, 6), {distance: 0});
+    });
+  };
+})();
+</script>
+</body>
+</html>

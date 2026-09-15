@@ -1,0 +1,86 @@
+/* Shared styles for every scene template. Read as text and inlined into the rendered page, so a
+   template only describes its own layout. Everything is in viewport units, so a 640x360 preview and
+   a 1920x1080 master look identical rather than merely similar.
+
+   Contract: the element with id="fit" is the text block the runtime fits, and it takes its size from
+   --fit-size. A template sets --fit-size on itself or an ancestor, never font-size on #fit or on
+   anything inside it: an id selector outranks a class, so a plain font-size on #fit silently beat
+   every template's own choice and rendered a terminal and a split panel at headline size. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: var(--bg); color: var(--fg);
+  font-family: "Segoe UI", Inter, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#stage {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 7vh 8vw;
+}
+
+.eyebrow {
+  font-size: 1.5vw; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--accent); font-weight: 700; margin-bottom: 2.4vh;
+}
+
+/* The bounded box the runtime fits text into. */
+#fit { max-height: 64vh; overflow: hidden; width: 100%; font-size: var(--fit-size, 6vw); }
+
+.headline { line-height: 1.08; font-weight: 800; letter-spacing: -0.02em; }
+.headline .word { display: inline-block; margin-right: 0.26em; }
+
+.subline { font-size: 2.1vw; line-height: 1.35; color: var(--muted); margin-top: 3vh; max-width: 74%; }
+.footnote { font-size: 1.3vw; color: var(--muted); margin-top: 4vh; letter-spacing: 0.02em; }
+
+.accent { color: var(--accent); }
+.accent2 { color: var(--accent2); }
+
+/* --- horizontal bars: labels stay readable on the left, values on the right --- */
+.bars { width: 100%; display: flex; flex-direction: column; gap: 3.2vh; }
+.bar-row { display: flex; align-items: center; gap: 2vw; }
+.bar-label { width: 22%; font-size: 2vw; font-weight: 700; text-align: right; }
+.bar-track { flex: 1; height: 5.4vh; background: rgba(255,255,255,0.07); border-radius: 0.6vh; overflow: hidden; }
+.bar-fill { height: 100%; width: 0; border-radius: 0.6vh; background: var(--accent); }
+.bar-value { width: 14%; font-size: 1.9vw; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* --- node diagram --- */
+.diagram { position: relative; width: 100%; flex: 1; min-height: 52vh; }
+.node {
+  position: absolute; transform: translate(-50%, -50%);
+  padding: 1.5vh 1.6vw; border-radius: 1vh;
+  background: rgba(79,157,255,0.12); border: 0.18vh solid var(--accent);
+  font-size: 1.6vw; font-weight: 700; white-space: nowrap;
+}
+.edge { position: absolute; height: 0.24vh; background: var(--muted); transform-origin: left center; }
+
+/* --- terminal / code card --- */
+.terminal { width: 100%; max-width: 82%; border-radius: 1.2vh; overflow: hidden; border: 0.18vh solid rgba(255,255,255,0.12); background: #05070c; }
+.term-bar { display: flex; align-items: center; gap: 0.8vw; padding: 1.4vh 1.4vw; background: rgba(255,255,255,0.05); }
+.term-dot { width: 0.85vw; height: 0.85vw; border-radius: 50%; background: rgba(255,255,255,0.28); }
+.term-title { margin-left: 1vw; font-size: 1.15vw; color: var(--muted); }
+.term-body { --fit-size: 1.55vw; font-family: Consolas, "Cascadia Mono", monospace; line-height: 1.65; padding: 2.4vh 1.8vw; }
+.term-line { white-space: pre-wrap; word-break: break-word; }
+.term-prompt { color: var(--accent2); }
+
+/* --- split comparison --- */
+.split { display: flex; gap: 3vw; width: 100%; align-items: stretch; }
+.panel { flex: 1; padding: 3vh 2.2vw; border-radius: 1.2vh; border: 0.18vh solid rgba(255,255,255,0.13); background: rgba(255,255,255,0.04); }
+.panel h3 { font-size: 1.35vw; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-bottom: 2vh; }
+.panel-body { --fit-size: 2vw; line-height: 1.35; font-weight: 700; }
+.panel.right { border-color: var(--accent); background: rgba(79,157,255,0.09); }
+.badge {
+  position: absolute; bottom: 11vh; right: 8vw; transform: rotate(5deg);
+  padding: 1vh 1.6vw; border: 0.3vh solid #ff5a52; color: #ff8d87;
+  font-weight: 800; letter-spacing: 0.14em; font-size: 1.3vw; border-radius: 0.7vh;
+}
+
+/* --- end card --- */
+.endcard { --fit-size: 4.4vw; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3vh; }
+.endcard img { max-height: 18vh; }
+.endcard h1 { font-weight: 800; letter-spacing: -0.02em; }
+.endcard .next { font-size: 1.9vw; color: var(--accent); font-weight: 700; }
+.endcard .rule { width: 16vw; height: 0.3vh; background: var(--accent); }

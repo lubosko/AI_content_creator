@@ -1,0 +1,19 @@
+{
+  "name": "ai-social-content-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local project generator for AI social content production workflows.",
+  "type": "commonjs",
+  "bin": {
+    "social-content-agent": "src/cli.js"
+  },
+  "scripts": {
+    "create": "node src/cli.js create",
+    "test": "node tests/run-tests.js",
+    "dev": "node src/server.js",
+    "dist": "node scripts/package.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>end card</title><style>/*__STYLES__*/</style></head>
+<body>
+<div id="stage">
+  <div class="endcard">
+    <img id="logo" alt="" hidden>
+    <div class="rule" id="rule"></div>
+    <div id="fit"><h1 id="title"></h1></div>
+    <div class="next" id="next"></div>
+  </div>
+  <div class="footnote" id="footnote"></div>
+</div>
+<script>/*__SCENE__*/</script>
+<script>/*__RUNTIME__*/</script>
+<script>
+(function () {
+  'use strict';
+  var parts = [];
+  window.build = function (scene) {
+    var data = scene.data || {};
+    document.getElementById('title').textContent = String(scene.text || '').trim() || 'Untitled';
+    if (data.next) document.getElementById('next').textContent = String(data.next);
+    if (data.footnote) document.getElementById('footnote').textContent = String(data.footnote);
+    if (scene.brand && scene.brand.logo) {
+      var logo = document.getElementById('logo');
+      logo.src = scene.brand.logo;
+      logo.hidden = false;
+    }
+
+    var rule = document.getElementById('rule');
+    parts.push(rule);
+    if (!document.getElementById('logo').hidden) parts.push(document.getElementById('logo'));
+    parts.push(document.getElementById('title'));
+    if (document.getElementById('next').textContent) parts.push(document.getElementById('next'));
+    if (document.getElementById('footnote').textContent) parts.push(document.getElementById('footnote'));
+  };
+
+  window.renderFrame = function (n) {
+    var total = window.frameCount;
+    var start = Math.max(1, Math.round(total * 0.12));
+    var span = Math.max(4, Math.round(total * 0.5 / Math.max(1, parts.length)));
+    parts.forEach(function (el, i) {
+      // The rule draws outward rather than fading in.
+      if (el.id === 'rule') {
+        var p = window.R.ease(window.R.span(n, start + i * Math.round(span * 0.6), span));
+        el.style.transform = 'scaleX(' + p.toFixed(3) + ')';
+        el.style.opacity = String(p);
+        return;
+      }
+      window.R.reveal(el, window.R.span(n, start + i * Math.round(span * 0.6), span), {distance: 14});
+    });
+  };
+})();
+</script>
+</body>
+</html>
