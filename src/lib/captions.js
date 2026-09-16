@@ -97,6 +97,27 @@ function captionsFor({timeline, script}) {
     windows.get(key).push({start, span, scene_id: clip.scene_id});
   }
 
+  /* A window is clamped so it cannot run past the next one, in timeline order and across sections: a
+     section's last scene overruns the section that follows it just as easily as its own successor. A
+     section whose narration was longer than its scenes used to produce spans that summed to the whole
+     audio and therefore overlapped, and the captions inherited the overlap - this app generated the
+     fault and then blocked the video for it. The composer no longer builds such a timeline, and this
+     keeps a timeline from an older run, or any other source, from producing cues that talk over each
+     other. */
+  const ordered = [];
+  for (const spans of windows.values()) {
+    spans.sort((left, right) => left.start - right.start);
+    for (const span of spans) ordered.push(span);
+  }
+  ordered.sort((left, right) => left.start - right.start);
+  const timelineEnd = Number(timeline && timeline.duration_seconds) > 0 ? Number(timeline.duration_seconds) : null;
+  ordered.forEach((span, index) => {
+    const next = index + 1 < ordered.length ? ordered[index + 1].start : timelineEnd;
+    if (typeof next !== 'number') return;
+    const room = next - span.start;
+    if (room >= 0 && span.span > room) span.span = room;
+  });
+
   for (const [sectionId, spans] of windows) {
     const section = sections.get(sectionId);
     const pieces = sentences(section ? section.narration : '');
@@ -132,13 +153,18 @@ function captionsFor({timeline, script}) {
       const windowCues = groupIntoCues(bucket);
       if (!windowCues.length) return;
       const cueText = windowCues.reduce((sum, cue) => sum + cue.length, 0) || 1;
+      // The window's own end, which the clamp above has already kept inside the next one.
+      const windowEnd = target.start + target.span;
       let cursor = target.start;
       windowCues.forEach((cue, position) => {
         const last = position === windowCues.length - 1;
-        const share = last ? (target.start + target.span) - cursor : (cue.length / cueText) * target.span;
-        const end = last ? target.start + target.span : cursor + share;
-        cues.push({start: cursor, end: Math.max(cursor + 0.4, end), text: wrapCue(cue), scene_id: target.scene_id});
-        cursor = end;
+        const raw = last ? windowEnd : cursor + (cue.length / cueText) * target.span;
+        /* A cue is never allowed to run past its window, and the minimum readable length is applied
+           to the cursor as well as the end: forcing an end forward while leaving the cursor behind
+           was what made a short cue overlap the one after it inside a single window. */
+        const end = Math.min(windowEnd, Math.max(cursor + 0.4, raw));
+        cues.push({start: cursor, end: Math.max(cursor, end), text: wrapCue(cue), scene_id: target.scene_id});
+        cursor = Math.max(cursor, end);
       });
     });
   }

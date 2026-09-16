@@ -17,6 +17,44 @@ const FFPROBE = detectMediaTools().find(tool => tool.name === 'ffprobe');
 assert.ok(FFMPEG && FFMPEG.available, 'ffmpeg is required to compose');
 assert.ok(FFPROBE && FFPROBE.available, 'ffprobe is required to verify the master');
 
+/* A section whose recorded narration is longer than the scenes it belongs to used to produce an
+   overlapping timeline: the audio was split across the scenes in proportion to scene length, which
+   sums to the whole audio, so wherever it did not fit a slice ran past its own scene and talked over
+   the next one. The captions inherited those windows and overlapped too, and QC then blocked the
+   video for a fault the app itself had written. The composer lengthens the scenes instead, and the
+   caption builder refuses to emit an overlap whatever timeline it is handed. */
+function testOverlongNarration() {
+  const narration = 'A long section narration that takes far longer to read aloud than the scenes plotted for it allow, by a wide margin.';
+  const built = captions.captionsFor({
+    timeline: {duration_seconds: 30, tracks: [{id: 'narration', type: 'audio', clips: [
+      {scene_id: 'one', section_id: 'hook', start_seconds: 0, end_seconds: 10, duration_seconds: 10, audio_span_seconds: 18},
+      {scene_id: 'two', section_id: 'hook', start_seconds: 10, end_seconds: 20, duration_seconds: 10, audio_span_seconds: 20}
+    ]}]},
+    script: {sections: [{id: 'hook', narration}]}
+  });
+  assert.ok(built.cues.length >= 2, 'the narration must produce cues, got ' + built.cues.length);
+  for (let index = 1; index < built.cues.length; index++) {
+    assert.ok(built.cues[index].start >= built.cues[index - 1].end - 0.001,
+      'Cue ' + (index + 1) + ' must not start before cue ' + index + ' ends: ' + built.cues[index].start + ' vs ' + built.cues[index - 1].end);
+  }
+  assert.ok(built.cues.filter(cue => cue.scene_id === 'one').every(cue => cue.end <= 10.001), 'a cue must never leave its own scene');
+  assert.ok(built.cues.every(cue => cue.end <= 30.001), 'and none may run past the video');
+
+  /* A window that overruns the section after it is the same fault one level up: the last scene of a
+     section spills into the next section just as easily as into its own successor. */
+  const across = captions.captionsFor({
+    timeline: {duration_seconds: 30, tracks: [{id: 'narration', type: 'audio', clips: [
+      {scene_id: 'a', section_id: 'first', start_seconds: 0, end_seconds: 10, duration_seconds: 10, audio_span_seconds: 14},
+      {scene_id: 'b', section_id: 'second', start_seconds: 10, end_seconds: 20, duration_seconds: 10, audio_span_seconds: 6}
+    ]}]},
+    script: {sections: [{id: 'first', narration: 'One two three.'}, {id: 'second', narration: 'Four five six.'}]}
+  });
+  for (let index = 1; index < across.cues.length; index++) {
+    assert.ok(across.cues[index].start >= across.cues[index - 1].end - 0.001, 'A section must not caption over the next one');
+  }
+  console.log('  captions: an over-long section is clamped to its scenes, across sections too');
+}
+
 const SECTION_HOOK = 'The robot will not warn you.';
 const SECTION_BODY = 'Check the light curtain before entry. Then check it again after lunch.';
 
@@ -54,6 +92,7 @@ function probeMaster(file) {
 }
 
 async function run() {
+  testOverlongNarration();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'compose-test-'));
   const projectsRoot = path.join(root, 'projects');
   const state = {assetId: null, speechCalls: 0};
@@ -247,7 +286,7 @@ async function run() {
     assert.equal(again.payload.artifact.duration_seconds, 7);
     assert.equal(again.payload.artifact.can_approve_master, true);
 
-    console.log('All composer tests passed: real master, split narration, captions, QC and render log.');
+    console.log('All composer tests passed: real master, split narration, captions, QC and render log, and no caption overlap when narration overruns its scenes.');
   } finally {
     if (server.closeAllConnections) server.closeAllConnections();
     await close(server);

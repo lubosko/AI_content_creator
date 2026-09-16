@@ -42,6 +42,22 @@ Without that split every scene carrying a section would replay the whole section
 narrate itself twice. The captions follow the same split, so a section is captioned once and each
 scene's window gets its share of the words.
 
+**When the recorded narration is longer than the scenes it belongs to, those scenes grow to hold it.**
+They used to keep their planned length while the section's audio was split across them in proportion
+to scene length — which sums to the *whole* audio, so wherever it did not fit the slice ran past its
+own scene and talked over the next one. The captions inherited the same windows and overlapped, and QC
+then blocked the video for a fault the composer itself had written. The warning claimed the excess was
+"cut"; it never was.
+
+Narration is the story, so it is never cut. The section's budget becomes
+`max(planned scene time, measured narration)`, each scene takes its proportional share of that, and
+the slices are contiguous by construction — no overlap is possible. The video gets longer, and the
+warning says by how much and which section caused it. When the narration *fits*, nothing changes:
+timing is identical to before, which `tests/compose.test.js` pins with exact clip start times.
+
+The caption builder clamps each window to the next one in timeline order, across sections as well as
+within one, so a timeline from an older run cannot produce cues that talk over each other either.
+
 ### Captions
 
 The narration is synthesized per section, so the only timing known is the measured length of each

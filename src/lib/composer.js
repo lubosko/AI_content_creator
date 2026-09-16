@@ -64,6 +64,31 @@ function planTimeline(input) {
   const audioClips = [];
   let cursor = 0;
 
+  /* A narration file covers a whole script section, and a section is often spread over several scenes.
+     When the recorded narration is longer than the scenes it belongs to, those scenes grow to hold it.
+
+     They used to keep their planned length while the section's audio was split across them in
+     proportion to scene length - which sums to the *whole* audio, so wherever the audio did not fit
+     the slices ran past their own scene and talked over the next one. The captions inherited the same
+     windows and overlapped too, which is what QC caught. Narration is the story, so it is never cut:
+     the video gets longer instead, and the warnings below say by how much. */
+  const sectionBudget = new Map();
+  {
+    const planned = new Map();
+    for (const scene of scenes) {
+      const key = scene.narration_section_id ? String(scene.narration_section_id) : null;
+      if (!key) continue;
+      if (!planned.has(key)) planned.set(key, {seconds: 0, measured: 0});
+      const entry = planned.get(key);
+      entry.seconds += Number(scene.seconds) > 0 ? Number(scene.seconds) : 0;
+      const record = narration.get(key);
+      entry.measured = Math.max(entry.measured, record ? Number(record.duration_seconds) || 0 : 0);
+    }
+    for (const [key, entry] of planned) {
+      sectionBudget.set(key, {planned: entry.seconds, measured: entry.measured, total: Math.max(entry.seconds, entry.measured)});
+    }
+  }
+
   scenes.forEach((scene, index) => {
     const record = filled.get(scene.id) || null;
     const status = record ? record.status : 'missing';
@@ -108,10 +133,14 @@ function planTimeline(input) {
     }
     const measured = narrationRecord ? Number(narrationRecord.duration_seconds) || null : null;
     const planned = Number(scene.seconds) > 0 ? Number(scene.seconds) : null;
-    const duration = planned || measured || opts.fallbackSeconds;
+    let duration = planned || measured || opts.fallbackSeconds;
     if (!planned) warnings.push('Scene ' + scene.id + ' has no planned duration, so ' + duration.toFixed(1) + 's was used.');
-    if (measured && planned && measured > planned + 0.5) {
-      warnings.push('The narration for scene ' + scene.id + ' runs ' + measured.toFixed(1) + 's, longer than the scene\'s ' + planned.toFixed(1) + 's, so it is cut at the scene end.');
+    /* This scene's share of its section's budget. The budget is the section's planned time, or the
+       recorded narration when that is longer, so a whole section always fits inside its scenes. */
+    const sectionKey = scene.narration_section_id ? String(scene.narration_section_id) : null;
+    const budget = sectionKey ? sectionBudget.get(sectionKey) : null;
+    if (budget && planned && budget.planned > 0 && budget.total > budget.planned) {
+      duration = Number((budget.total * (planned / budget.planned)).toFixed(3));
     }
 
     videoClips.push({
@@ -158,6 +187,8 @@ function planTimeline(input) {
     bySection.get(key).push(clip);
   }
   for (const [sectionId, clips] of bySection) {
+    /* `own` is the section's re-timed budget, so it is at least the measured narration and each
+       scene's slice therefore fits inside its own window. Nothing is cut and nothing overlaps. */
     const measured = clips[0].measured_seconds;
     const own = clips.reduce((sum, clip) => sum + clip.duration_seconds, 0);
     if (!measured || !clips[0].absolute_path) {
@@ -171,8 +202,13 @@ function planTimeline(input) {
       clip.audio_span_seconds = Number((measured * share).toFixed(3));
       consumed += clip.duration_seconds;
     }
-    if (own < measured - 0.5) {
+    if (measured > own + 0.5) {
+      // Only reachable if the budget could not be applied, e.g. a scene with no planned duration.
       warnings.push('The narration for section ' + sectionId + ' runs ' + measured.toFixed(1) + 's but its scenes total ' + own.toFixed(1) + 's, so the last ' + (measured - own).toFixed(1) + 's is cut.');
+    }
+    const sectionPlan = sectionBudget.get(sectionId);
+    if (sectionPlan && sectionPlan.total > sectionPlan.planned + 0.5) {
+      warnings.push('The narration for section ' + sectionId + ' runs ' + measured.toFixed(1) + 's but its scenes planned ' + sectionPlan.planned.toFixed(1) + 's, so those scenes were lengthened to hold it. The video is ' + (sectionPlan.total - sectionPlan.planned).toFixed(1) + 's longer than the storyboard asked for.');
     }
   }
 
