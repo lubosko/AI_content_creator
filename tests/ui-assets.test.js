@@ -2,10 +2,16 @@
 /* The assets workspace: what was produced for each scene, and for a scene with nothing, which source
    was asked and which was never consulted.
 
-   The manifest is written directly, because this is about how a search miss is reported. A miss used
-   to arrive as one concatenated sentence and be styled as a scene failure - which read as though the
+   The manifest is written directly, because this is about how a miss is reported. A miss used to
+   arrive as one concatenated sentence and be styled as a scene failure - which read as though the
    scene had broken, when usually it had simply found nothing, or had never been searched at all
-   because no Pexels key is configured. */
+   because no Pexels key is configured.
+
+   The other half of the same complaint: every scene that was neither own media nor sourced - a scene
+   drawn locally, a template missing its data, a scene nobody had chosen a path for - was handed the
+   headline "No free-licence media matched this scene." None of those is a licence outcome, and for a
+   scene drawn locally it was flatly false: nothing was ever looked for. So the drawn scene must carry
+   no licence language at all, and the headline must only name the sources when they were asked. */
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -42,7 +48,10 @@ const MANIFEST = {
         {provider: 'archive', short: 'Archive.org', reason: 'No Archive.org item matched that description.', retryable: false},
         {provider: 'openverse', short: 'Openverse', reason: 'No Openverse image matched that description.', retryable: false}
       ]
-    }
+    },
+    {scene_id: 'scene_four', title: 'Throughput chart', seconds: 8, status: 'rendered', template: 'bar-chart', file: 'scene-004.mp4', path: 'generated/video/scene-004.mp4', rights: {basis: 'own'}},
+    {scene_id: 'scene_five', title: 'Definition diagram', seconds: 8, status: 'failed', template: 'diagram', query: 'dora definition', reason: 'A diagram needs data.nodes with at least two entries. Give this scene the data it needs, or assign a different template.'},
+    {scene_id: 'scene_six', title: 'Closing shot', seconds: 8, status: 'skipped', reason: 'No stock media provider is configured, and this scene has no own material.'}
   ],
   sourcing: {
     ready: true,
@@ -55,7 +64,7 @@ const MANIFEST = {
     ]
   },
   rights: {can_render: true, attributions: [], blocked: [], warnings: []},
-  counts: {own_media: 1, produced: 1, rendered: 0, generated_external: 0, still_missing: 1, rights_blocked: 0, total_scenes: 3},
+  counts: {own_media: 1, produced: 1, rendered: 1, generated_external: 0, still_missing: 2, rights_blocked: 0, total_scenes: 5},
   warnings: []
 };
 
@@ -91,15 +100,25 @@ async function run() {
     assert.ok(body.indexOf('Pexels — not searched: No Pexels API key is configured.') >= 0, 'A source that was never consulted says so, in its own words');
     assert.ok(body.indexOf('Searched for: robot arm workbench') >= 0, 'The query that was tried is shown');
 
-    /* "Not searched" is not a scene failure, so it must not be painted like one. The only red text in
-       this workspace is the one line saying no footage was found. */
+    /* "Not searched" is not a scene failure, so it must not be painted like one. The red text in this
+       workspace is exactly the two scenes that really did not get media. */
     const errors = Array.prototype.slice.call(ui.document.querySelectorAll('.field-error')).map(node => ui.text(node));
-    assert.equal(errors.length, 1, 'Exactly one error line, got: ' + JSON.stringify(errors));
-    assert.equal(errors[0], 'No free-licence media matched this scene.');
+    assert.equal(errors.length, 2, 'Exactly two error lines, got: ' + JSON.stringify(errors));
+    assert.ok(errors.indexOf('No media found for this scene.') >= 0, 'A searched scene that found nothing says so');
+    assert.ok(errors.indexOf('This scene could not be produced.') >= 0, 'A scene that broke for a non-sourcing reason is not blamed on the sources');
     assert.equal(errors.some(text => text.indexOf('not searched') >= 0), false, 'A missing key must not be styled as a failed scene');
     assert.equal(errors.some(text => text.indexOf('Pexels') >= 0), false);
 
-    console.log('All assets workspace tests passed: per-source search reasons, one vocabulary, and a missing key not dressed up as a failure.');
+    /* --- a scene drawn locally is never a licence outcome --- */
+    assert.ok(body.indexOf('Drawn locally as bar-chart. No external source.') >= 0, 'A drawn scene names its template and says nothing was sourced');
+    assert.equal(body.indexOf('No free-licence media matched this scene.'), -1, 'That headline was untrue for every scene that carried it, so it is gone');
+    assert.equal(body.indexOf('No free-licence'), -1);
+
+    /* --- the template that is missing its data reports its own reason, not a search reason --- */
+    assert.ok(body.indexOf('A diagram needs data.nodes with at least two entries.') >= 0, 'The real cause of a failed template is shown');
+    assert.ok(body.indexOf('No media chosen for this scene yet.') >= 0, 'A scene with no path chosen is waiting, not failed');
+
+    console.log('All assets workspace tests passed: per-source search reasons, one vocabulary, drawn scenes free of licence language, and a missing key not dressed up as a failure.');
   } finally {
     if (server.closeAllConnections) server.closeAllConnections();
     await close(server);

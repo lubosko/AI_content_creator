@@ -334,8 +334,9 @@
     var counts = manifest.counts || {};
     wrap.append(C.metrics([
       {label: 'Narration sections', value: String(narration.produced || 0), numeric: true, note: (narration.total_seconds ? narration.total_seconds.toFixed(1) + 's of audio' : 'no audio')},
-      {label: 'Own media used', value: String(counts.own_media || 0), numeric: true},
-      {label: 'Produced here', value: String(counts.produced || 0), numeric: true},
+      {label: 'Your media', value: String(counts.own_media || 0), numeric: true, note: 'includes generated'},
+      {label: 'Drawn locally', value: String(counts.rendered || 0), numeric: true},
+      {label: 'Sourced', value: String(counts.produced || 0), numeric: true},
       {label: 'Needs media', value: String(counts.still_missing || 0), numeric: true},
       {label: 'Rights blocked', value: String(counts.rights_blocked || 0), numeric: true, note: (counts.rights_blocked ? 'cannot be rendered' : 'all clear')}
     ]));
@@ -402,7 +403,13 @@
         else rightsLines.push(el('p', { class: 'metric-note', text: 'Rights: ' + (rightsState.short || 'cleared') }));
       }
       if (scene.status === 'own_media') {
-        sourceCell = el('div', { class: 'stack tight' }, [el('p', { class: 'metric-note', text: 'Your own material' })].concat(rightsLines));
+        /* A generated file is attached to the scene exactly like own media, and the gate clears it the
+           same way, but it is not something the operator filmed, so it is not labelled as if it were. */
+        var generated = scene.origin === 'generated';
+        var holder = scene.rights && scene.rights.holder ? ' with ' + scene.rights.holder : '';
+        sourceCell = el('div', { class: 'stack tight' }, [
+          el('p', { class: 'metric-note', text: generated ? 'Generated' + holder + ', then attached to this scene.' : 'Your own material' })
+        ].concat(rightsLines));
       } else if (scene.status === 'produced') {
         sourceCell = el('div', { class: 'stack tight' }, [
           el('p', { class: 'metric-note', text: (scene.clip.provider || 'stock') + (scene.clip.author ? ' | ' + scene.clip.author : '') + (scene.clip.media_kind === 'image' ? ' | still image' : '') }),
@@ -410,12 +417,25 @@
         ].concat(rightsLines).concat([
           scene.clip.source_url ? el('a', { class: 'mono', href: scene.clip.source_url, text: 'Source clip', attrs: {target: '_blank', rel: 'noopener noreferrer'}}) : null
         ]));
+      } else if (scene.status === 'rendered') {
+        /* Drawn here by our own code from the project's own script. No source was ever consulted, so
+           this scene has no licence question and must not be shown one. */
+        sourceCell = el('div', { class: 'stack tight' }, [
+          el('p', { class: 'metric-note', text: 'Drawn locally as ' + (scene.template || 'a template') + '. No external source.' })
+        ].concat(rightsLines));
       } else {
         /* Which source was asked and which was never consulted. The concatenated sentence is the
            fallback, not the main event: "no key configured" is not the same problem as "nothing
-           matched", and only the first is something you can fix. */
-        sourceCell = el('div', { class: 'stack tight' }, [el('p', { class: 'field-error', text: 'No free-licence media matched this scene.' })]);
+           matched", and only the first is something you can fix.
+           The headline accuses the sources only when the sources were actually asked. A template
+           missing its data, and a scene nobody has chosen a path for, are not licence outcomes, and
+           telling the operator "no free-licence media matched" for them was simply untrue. */
         var attempts = scene.sourced_after || [];
+        var waiting = scene.status === 'skipped';
+        var headline = waiting ? 'No media chosen for this scene yet.'
+          : attempts.length ? 'No media found for this scene.'
+            : 'This scene could not be produced.';
+        sourceCell = el('div', { class: 'stack tight' }, [el('p', { class: waiting ? 'metric-note' : 'field-error', text: headline })]);
         attempts.forEach(function (item) {
           sourceCell.append(el('p', { class: 'metric-note', text: item.short + ' — searched, ' + item.reason }));
         });
