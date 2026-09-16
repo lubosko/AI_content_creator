@@ -89,17 +89,41 @@ that has media carries `media: {kind, duration_seconds, width, height}` so the c
 resolve the library itself. A drawn scene's rights basis is `own`: it is our own code drawing the
 project's own script.
 
-## Filling a scene with something generated elsewhere
+## Filling a scene
 
-The prompt pack is built by `src/lib/sceneAssets.js` and served through the Storyboard stage:
+The Storyboard screen shows **one card per scene**, and each card offers the three ways to fill it as
+buttons. Only the chosen path opens, so a fourteen-scene storyboard does not put every control for
+every scene on screen at once:
+
+| Path | What it does |
+|---|---|
+| **Draw locally** | Assign one of six templates, edit its data, render a preview, or clear it |
+| **Generate with Comfy** | Pick a workflow, edit the prompt, generate, watch progress, cancel |
+| **Use a file** | Attach material chosen for this project, upload a generated file, or detach the current media |
+
+A card remembers whether it is open and which path you were on, because a re-render rebuilds the
+element and `<details>` cannot hold that state itself. Without it the card snapped shut after every
+save, and while the script results were still arriving.
+
+The state is named in one vocabulary everywhere — on the pill, in the metrics and on the assets
+screen: **Your media**, **Drawn locally**, **Generated**, **Needs media**. It used to be four names for
+the same thing (`Missing`, `Not filled`, `To fill`, `Still to produce`), which read as four problems.
+
+The library picker lists only **material chosen for this project**, which is the same rule
+`providerStages.selectedAssets()` applies. Offering the whole library meant an unrelated file appeared
+even when nothing had been chosen.
+
+### The prompt pack
+
+Built by `src/lib/sceneAssets.js` and served through the Storyboard stage:
 
 - **The model's prompt is carried verbatim.** The tool notes sit in their own block so nobody has to
   guess which words are the prompt and which are advice.
-- Tool profiles exist for manual, Leonardo AI and Mootion. Their notes are **guidance, never vendor
-  documentation**, and both the interface and the pack say so.
-- Scenes that are mostly on-screen text are flagged. A video generator will misspell those words or
-  invent ones that are not in the script, which is worse than useless in a technical explainer; the
-  flag says so and points at the local templates instead.
+- Tool profiles exist for manual, Leonardo AI, Mootion and Comfy. Their notes are **guidance, never
+  vendor documentation**, and both the interface and the pack say so.
+- Scenes that are mostly on-screen text are flagged in the **Generate** path, where the decision is
+  made. A video generator will misspell those words or invent ones that are not in the script, which
+  is worse than useless in a technical explainer; the flag points at the local templates instead.
 - Scenes already assigned a template stay in the pack as a fallback, marked `assigned_template`, so a
   generation is not spent on them by accident.
 
@@ -109,7 +133,7 @@ media; its rights are not cleared; or the scene is assigned a template. On succe
 `scene.attachment` with the tool, the note and the rights basis, and adopts the asset into the
 project's material selection — asking to attach this file to this scene already is that decision, and
 requiring a separate selection round trip would be busywork. Detaching (`asset_id: null`) clears both
-fields and returns the scene to needing media.
+fields and returns the scene to needing media, and has a control on the card.
 
 ## Decisions and why not Remotion
 

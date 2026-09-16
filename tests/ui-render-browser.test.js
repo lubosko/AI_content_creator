@@ -88,8 +88,18 @@ async function run() {
     await page.screenshot(path.join(SHOTS, '10-scene-fill.png'));
 
     // Assign it, which is the plan change, then draw a preview of the text card.
-    await page.evaluate("Array.from(document.querySelectorAll('.fill-scene')).forEach(function (row) { row.open = true; }); return true;");
-    await page.waitFor('!!document.getElementById("preview-holder") || true', 'the editors to open', 5000);
+    /* Open a card the way a person does - by clicking its summary - and then prove it stays open.
+       It used to snap shut, because a re-render rebuilt the element and `<details>` lost its state. */
+    const aspirationRow = "Array.from(document.querySelectorAll('.fill-scene')).filter(function (n) { return n.innerText.indexOf('Aspiration') >= 0; })[0]";
+    await page.evaluate('var row = ' + aspirationRow + '; row.querySelector("summary").click(); return row.open;');
+    await page.waitFor('(function () { var row = ' + aspirationRow + '; return !!row && row.open; })()', 'the card to open when its summary is clicked', 5000);
+    const opened = await page.evaluate('var row = ' + aspirationRow + '; return row.getAttribute("data-state");');
+    assert.equal(opened, 'needs', 'A scene with nothing chosen reports needing media, in the same words the metric uses');
+    await page.evaluate([
+      "var row = Array.from(document.querySelectorAll('.fill-scene')).filter(function (n) { return n.innerText.indexOf('Aspiration') >= 0; })[0];",
+      "Array.from(row.querySelectorAll('button')).filter(function (b) { return b.innerText.trim() === 'Draw locally'; })[0].click();",
+      "return true;"
+    ].join(' '));
     await page.evaluate([
       "var row = Array.from(document.querySelectorAll('.fill-scene')).filter(function (n) { return n.innerText.indexOf('Aspiration') >= 0; })[0];",
       "Array.from(row.querySelectorAll('button')).filter(function (b) { return b.innerText.trim() === 'Render preview'; })[0].click();",
@@ -107,6 +117,13 @@ async function run() {
     assert.equal(preview.width, 640, 'A preview is drawn at 640 wide, got ' + preview.width);
     assert.equal(preview.height, 360, 'A preview is drawn at 360 high, got ' + preview.height);
     assert.ok(Math.abs(preview.duration - 3) < 0.2, 'A 3 second scene must produce a 3 second preview, got ' + preview.duration);
+
+    /* Drawing a preview re-renders the screen. The card you were working in must still be open - this
+       is the real-browser version of the bug, where a `<details>` loses its state to a DOM rebuild. */
+    const afterRender = await page.evaluate('var row = ' + aspirationRow + '; return row ? {open: row.open, path: row.getAttribute("data-path")} : null;');
+    assert.ok(afterRender, 'The card must still be on screen after the preview re-rendered the view');
+    assert.equal(afterRender.open, true, 'A re-render must not close the card you are working in');
+    assert.equal(afterRender.path, 'local', 'And it must remember which of the three paths you were on');
     await page.screenshot(path.join(SHOTS, '11-scene-preview.png'));
 
     // The file the browser just played must exist inside the project.
@@ -119,13 +136,14 @@ async function run() {
     await page.evaluate([
       "var row = Array.from(document.querySelectorAll('.fill-scene')).filter(function (n) { return n.innerText.indexOf('Benchmark') >= 0; })[0];",
       "row.open = true;",
+      "Array.from(row.querySelectorAll('button')).filter(function (b) { return b.innerText.trim() === 'Draw locally'; })[0].click();",
       // A closed details has no innerText for its contents, so the row must be open to find the button.
       "var btn = Array.from(row.querySelectorAll('button')).filter(function (b) { return /Draw with this template|Save template/.test(b.innerText); })[0];",
       "if (!btn) { throw new Error('assign button missing; buttons were: ' + Array.from(row.querySelectorAll('button')).map(function (b) { return b.innerText; }).join(' | ')); }",
       "btn.click();",
       "return true;"
     ].join(' '));
-    await page.waitFor('document.body.innerText.indexOf("Drawn locally: bar-chart") >= 0', 'the assignment to appear', 20000);
+    await page.waitFor('document.body.innerText.indexOf("Drawn locally as bar-chart") >= 0', 'the assignment to appear', 20000);
     const board = JSON.parse(fs.readFileSync(path.join(directory, 'storyboard.json'), 'utf8'));
     assert.equal(board.scenes.find(scene => scene.id === 'bars_one').graphic_template, 'bar-chart', 'The assignment must be written to the plan');
     assert.equal(board.scenes.find(scene => scene.id === 'card_one').graphic_template, undefined, 'A preview must not assign anything');

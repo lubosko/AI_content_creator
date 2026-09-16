@@ -474,7 +474,14 @@ async function production({script, storyboard: board, audioDir, videoDir, projec
     }
     const found = await stock.search({query, minDurationSeconds: scene.seconds});
     if (!found.ok) {
-      produced.push({scene_id: scene.id, status: 'failed', reason: found.reason, query: searchQueryFor(query), retryable: found.retryable !== false});
+      /* The per-source reasons travel with the scene, not only as the one concatenated sentence in
+         `reason`. The interface can then show which source was asked and which was never consulted,
+         which is the difference between "nothing matched" and "no key configured". */
+      produced.push({
+        scene_id: scene.id, status: 'failed', reason: found.reason, query: searchQueryFor(query),
+        retryable: found.retryable !== false,
+        sourced_after: found.attempts && found.attempts.length ? found.attempts : undefined
+      });
       continue;
     }
     try {
@@ -535,6 +542,10 @@ async function production({script, storyboard: board, audioDir, videoDir, projec
       file: outcome && outcome.file ? outcome.file : null,
       path: outcome && outcome.path ? outcome.path : null,
       reason: outcome && outcome.reason ? outcome.reason : null,
+      /* Why each source that was tried did not deliver, and the query that was tried, so a scene with
+         no media can explain itself per source instead of as one concatenated sentence. */
+      query: outcome && outcome.query ? outcome.query : null,
+      sourced_after: outcome && outcome.sourced_after ? outcome.sourced_after : null,
       template: outcome && outcome.template ? outcome.template : null,
       reused: !!(outcome && outcome.reused),
       clip: outcome && outcome.clip ? outcome.clip : null,

@@ -167,6 +167,47 @@
   var scenePreviews = {};
   function previewKey(folder, sceneId) { return folder + '/' + sceneId; }
 
+  /* Which scene cards are open, and which of the three paths you were using. Kept outside the render
+     because a re-render rebuilds the element and `<details>` loses its open state - which happens
+     after every edit, and once when the script results finish loading. That is why a card used to
+     snap shut the moment you opened it or saved a template. */
+  var fillState = {};
+  function fillKey(folder, sceneId) { return folder + '/' + sceneId; }
+  function fillFor(folder, sceneId) {
+    var key = fillKey(folder, sceneId);
+    if (!fillState[key]) fillState[key] = { open: false, path: null };
+    return fillState[key];
+  }
+
+  /* Watchers a screen started and must stop when it is replaced. Collected per render so fourteen
+     scene cards cannot each overwrite the one cleanup slot. */
+  var activeWatchers = [];
+
+  /* The Comfy status. One request per render rather than one per scene, which is the difference
+     between 1 and 14 on a full storyboard, and it is re-read every time so a key added or a workflow
+     file dropped in is noticed without restarting anything. A re-render is requested only when the
+     answer actually changed, so renders converge instead of looping. */
+  var comfyLast = {};
+  var comfyPending = {};
+  function comfyFor(ctx, folder) {
+    if (!comfyPending[folder]) {
+      comfyPending[folder] = true;
+      ctx.api.comfyStatus().then(function (status) {
+        comfyPending[folder] = false;
+        var before = comfyLast[folder];
+        comfyLast[folder] = status;
+        if (!before || before.configured !== status.configured || before.workflow_ready !== status.workflow_ready) ctx.rerender();
+      }).catch(function () {
+        comfyPending[folder] = false;
+        if (!comfyLast[folder]) {
+          comfyLast[folder] = { configured: false, workflow_ready: false, workflow_problem: 'The Comfy status could not be read.' };
+          ctx.rerender();
+        }
+      });
+    }
+    return comfyLast[folder] || null;
+  }
+
   function renderPreviewPlayer(holder, folder, preview) {
     C.clear(holder);
     holder.append(el('p', { class: 'metric-note', text: 'Preview: ' + preview.template + ', ' + preview.seconds + 's, ' + preview.width + 'x' + preview.height }));
@@ -232,7 +273,7 @@
       var sceneTable = storyboardTable(ctx, saved);
       if (sceneTable) content = sceneTable;
       // The scene table shows the narration each scene covers, so the script must be loaded too.
-      if (!state.results.script && state.resultsLoading !== 'script') {
+      if (!state.results.script && !state.resultsAttempted.script && state.resultsLoading !== 'script') {
         ctx.loadResults('script').then(function () { ctx.rerender(); }).catch(function () { /* the table degrades to section ids */ });
       }
     }
@@ -295,7 +336,7 @@
       {label: 'Narration sections', value: String(narration.produced || 0), numeric: true, note: (narration.total_seconds ? narration.total_seconds.toFixed(1) + 's of audio' : 'no audio')},
       {label: 'Own media used', value: String(counts.own_media || 0), numeric: true},
       {label: 'Produced here', value: String(counts.produced || 0), numeric: true},
-      {label: 'Still missing', value: String(counts.still_missing || 0), numeric: true},
+      {label: 'Needs media', value: String(counts.still_missing || 0), numeric: true},
       {label: 'Rights blocked', value: String(counts.rights_blocked || 0), numeric: true, note: (counts.rights_blocked ? 'cannot be rendered' : 'all clear')}
     ]));
     wrap.append(C.banner(manifest.status === 'complete' ? 'ok' : 'warn',
@@ -311,7 +352,8 @@
         sourcingRows.append(el('p', { class: 'metric-note', text: 'Searched: ' + item.short + ' (' + (item.media_kinds || []).join(', ') + ')' }));
       });
       (sourcing.unavailable || []).forEach(function (item) {
-        sourcingRows.append(el('p', { class: 'field-error', text: 'Not searched: ' + item.short + ' — ' + item.reason }));
+        // A source that was never consulted is a note, not a failure: nothing about this scene broke.
+        sourcingRows.append(el('p', { class: 'metric-note', text: 'Not searched: ' + item.short + ' — ' + item.reason }));
       });
       if (!(sourcing.sources || []).length && !(sourcing.unavailable || []).length) sourcingRows.append(el('p', { class: 'metric-note', text: 'No media source was consulted.' }));
       wrap.append(C.panel('Where the media came from', {
@@ -368,7 +410,21 @@
         ].concat(rightsLines).concat([
           scene.clip.source_url ? el('a', { class: 'mono', href: scene.clip.source_url, text: 'Source clip', attrs: {target: '_blank', rel: 'noopener noreferrer'}}) : null
         ]));
-      } else sourceCell = el('p', { class: 'field-error', text: scene.reason || 'Nothing was produced for this scene.' });
+      } else {
+        /* Which source was asked and which was never consulted. The concatenated sentence is the
+           fallback, not the main event: "no key configured" is not the same problem as "nothing
+           matched", and only the first is something you can fix. */
+        sourceCell = el('div', { class: 'stack tight' }, [el('p', { class: 'field-error', text: 'No free-licence media matched this scene.' })]);
+        var attempts = scene.sourced_after || [];
+        attempts.forEach(function (item) {
+          sourceCell.append(el('p', { class: 'metric-note', text: item.short + ' — searched, ' + item.reason }));
+        });
+        ((sourcing && sourcing.unavailable) || []).forEach(function (item) {
+          sourceCell.append(el('p', { class: 'metric-note', text: item.short + ' — not searched: ' + item.reason }));
+        });
+        if (!attempts.length && scene.reason) sourceCell.append(el('p', { class: 'metric-note', text: scene.reason }));
+        if (scene.query) sourceCell.append(el('p', { class: 'metric-note mono', text: 'Searched for: ' + scene.query }));
+      }
       body2.append(el('tr', {}, [
         el('td', {}, [el('strong', { text: scene.title || scene.scene_id }), el('p', { class: 'metric-note mono', text: scene.scene_id })]),
         el('td', {}, [pill, el('p', { class: 'metric-note', text: scene.seconds ? scene.seconds + 's needed' : '' })]),
@@ -385,8 +441,9 @@
     return wrap;
   }
 
-  /* Reads the storyboard artifact and renders each scene with its narration, chosen own media, and
-     the generation prompt that stands in when nothing available fits. */
+  /* The storyboard is a plan about scenes, so it shows the scenes themselves: one card each, and the
+     three ways of filling a scene behind a button rather than all on screen at once.
+     A card remembers whether it is open and which path you were on, because a re-render rebuilds it. */
   function storyboardTable(ctx, saved) {
     var file = (saved.files || []).filter(item => /storyboard\.json$/.test(item.path))[0];
     if (!file || !file.content) return null;
@@ -395,8 +452,10 @@
     var scenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
     if (!scenes.length) return null;
 
+    var folder = ctx.store.snapshot().folder;
     var library = {};
     ctx.store.snapshot().library.forEach(function (asset) { library[asset.id] = asset; });
+
     var scripts = ctx.store.snapshot().results.script;
     var narration = {};
     if (scripts) {
@@ -408,109 +467,55 @@
       }
     }
 
-    var wrap = el('div', { class: 'stack' });
-    if (parsed.warnings && parsed.warnings.length) {
-      parsed.warnings.forEach(function (warning) { wrap.append(C.banner('warn', 'Storyboard warning', warning)); });
-    }
-
-    /* The prompt pack and the template vocabulary, so the fill column and the panel below it use the
-       server's own names rather than a list invented here. */
+    /* The prompt pack and the template vocabulary come from the server, so the cards use its own names
+       rather than a list invented here. */
     var packFile = (saved.files || []).filter(function (item) { return /scene_prompts\.json$/.test(item.path); })[0];
     var pack = null;
     if (packFile && packFile.content) { try { pack = JSON.parse(packFile.content); } catch (error) { pack = null; } }
     var promptsById = {};
     if (pack && Array.isArray(pack.prompts)) pack.prompts.forEach(function (item) { promptsById[item.scene_id] = item; });
     var templates = ((ctx.store.snapshot().renderTemplates || {}).templates) || [];
-    var profiles = (pack && pack.profiles) || ((ctx.store.snapshot().renderTemplates || {}).profiles) || {};
 
-    /* Explicit pills rather than the workflow-state ones: a scene waiting to be filled is not
-       "failed", and saying so would be wrong. */
-    function statePill(tone, text) { return el('span', { class: 'pill ' + tone, text: text }); }
+    var comfy = comfyFor(ctx, folder);
+    activeWatchers = [];
 
-    function fillCell(scene) {
+    var wrap = el('div', { class: 'stack' });
+    if (parsed.warnings && parsed.warnings.length) {
+      parsed.warnings.forEach(function (warning) { wrap.append(C.banner('warn', 'Storyboard warning', warning)); });
+    }
+
+    /* One vocabulary for one thing. A scene used to be "Missing" in the table, "Not filled" on the
+       card and "Still to produce" in the metrics, which read as three different problems. */
+    function stateOf(scene) {
       if (scene.asset_id) {
         var asset = library[scene.asset_id];
-        var attached = scene.attachment;
-        return el('div', { class: 'stack tight' }, [
-          statePill('ok', attached ? 'Attached' : 'Media'),
-          el('p', { class: 'metric-note', text: attached ? 'Attached: ' + (asset ? asset.name : scene.asset_id) : (asset ? asset.name : 'Asset ' + scene.asset_id) }),
-          attached && attached.provider ? el('p', { class: 'metric-note', text: 'from ' + attached.provider }) : null
-        ]);
+        var name = asset ? asset.name : 'Asset ' + scene.asset_id;
+        var generated = !!(scene.attachment && scene.attachment.rights_basis === 'generated');
+        var from = scene.attachment && scene.attachment.provider ? ' (from ' + scene.attachment.provider + ')' : '';
+        return {
+          id: generated ? 'generated' : 'your_media',
+          label: generated ? 'Generated' : 'Your media',
+          tone: 'ok',
+          note: (generated ? 'Generated file: ' : 'Your own media: ') + name + from + '.'
+        };
       }
       if (scene.graphic_template) {
-        return el('div', { class: 'stack tight' }, [
-          statePill('info', 'Local'),
-          el('p', { class: 'metric-note', text: 'Drawn locally: ' + scene.graphic_template })
-        ]);
+        return { id: 'drawn', label: 'Drawn locally', tone: 'info', note: 'Drawn locally as ' + scene.graphic_template + ', which is free and spells your words exactly.' };
       }
-      var prompt = promptsById[scene.id];
-      return el('div', { class: 'stack tight' }, [
-        statePill('review', 'To fill'),
-        el('p', { class: 'metric-note', text: prompt ? (prompt.typographic ? 'Mostly on-screen text' : 'Needs footage') : 'Nothing assigned yet' })
-      ]);
+      return { id: 'needs', label: 'Needs media', tone: 'review', note: 'Nothing is chosen for this scene yet. Pick one of the three ways below.' };
     }
+    function statePill(tone, text) { return el('span', { class: 'pill ' + tone, text: text }); }
 
-    var missing = scenes.filter(function (scene) { return !scene.asset_id; });
+    var withMedia = scenes.filter(function (scene) { return !!scene.asset_id; }).length;
+    var drawnCount = scenes.filter(function (scene) { return !scene.asset_id && !!scene.graphic_template; }).length;
+    var needsCount = scenes.length - withMedia - drawnCount;
     wrap.append(C.metrics([
-      {label: 'Scenes', value: String(scenes.length), numeric: true},
-      {label: 'Using own media', value: String(scenes.length - missing.length), numeric: true},
-      {label: 'Still to produce', value: String(missing.length), numeric: true},
-      {label: 'Total', value: (parsed.total_duration_seconds || 0) + 's', numeric: true}
+      { label: 'Scenes', value: String(scenes.length), numeric: true },
+      { label: 'Your media', value: String(withMedia), numeric: true, note: 'includes generated' },
+      { label: 'Drawn locally', value: String(drawnCount), numeric: true },
+      { label: 'Needs media', value: String(needsCount), numeric: true, note: needsCount ? 'cannot be rendered yet' : 'all clear' },
+      { label: 'Total', value: (parsed.total_duration_seconds || 0) + 's', numeric: true }
     ]));
-
-    var table = el('table', { class: 'table' });
-    table.append(el('thead', {}, el('tr', {}, [
-      el('th', { text: 'Scene' }), el('th', { text: 'Narration' }), el('th', { text: 'Own media' }), el('th', { text: 'Visual' }), el('th', { text: 'Fill' })
-    ])));
-    var body2 = el('tbody');
-    scenes.forEach(function (scene) {
-      var asset = scene.asset_id ? library[scene.asset_id] : null;
-      var section = scene.narration_section_id ? narration[scene.narration_section_id] : null;
-      var narrationCell = el('div', { class: 'stack tight' }, [
-        el('p', { class: 'metric-note', text: section ? String(section.narration || '').slice(0, 220) : (scene.narration_section_id ? 'Section ' + scene.narration_section_id : 'No narration section linked') })
-      ]);
-      if (section) narrationCell.append(el('span', { class: 'pill', text: section.title || scene.narration_section_id }));
-
-      var mediaCell = scene.asset_id
-        ? el('div', { class: 'stack tight' }, [
-            el('span', { class: 'pill ok', text: 'Own media' }),
-            el('p', { class: 'metric-note', text: asset ? asset.name : 'Asset ' + scene.asset_id })
-          ])
-        : el('div', { class: 'stack tight' }, [
-            el('span', { class: 'pill review', text: 'Missing' }),
-            el('p', { class: 'metric-note', text: scene.generation_prompt ? 'Prompt ready for asset production.' : 'No generation prompt was written for this scene.' })
-          ]);
-
-      var visualCell = el('div', { class: 'stack tight' }, [
-        el('p', { class: 'metric-note', text: scene.visual_intent || '' })
-      ]);
-      var meta = [scene.shot_type, scene.seconds ? scene.seconds + 's' : null, scene.transition].filter(Boolean).join(' | ');
-      if (meta) visualCell.append(el('span', { class: 'metric-note', text: meta }));
-      if (scene.on_screen_text) visualCell.append(el('span', { class: 'metric-note', text: 'On screen: ' + scene.on_screen_text }));
-      if (!scene.asset_id && scene.generation_prompt) visualCell.append(el('div', { class: 'asset-excerpt', text: scene.generation_prompt }));
-
-      body2.append(el('tr', {}, [
-        el('td', {}, [el('strong', { text: scene.title }), el('p', { class: 'metric-note mono', text: scene.id })]),
-        el('td', {}, narrationCell),
-        el('td', {}, mediaCell),
-        el('td', {}, visualCell),
-        el('td', {}, fillCell(scene))
-      ]));
-    });
-    table.append(body2);
-    wrap.append(table);
-
-    /* Filling a scene, per scene. Progressive disclosure keeps fourteen of these readable: each one
-       is a disclosure that stays closed until it is needed. */
-    var fillStack = el('div', { class: 'stack tight' });
-    if (!missing.length) {
-      fillStack.append(el('p', { class: 'metric-note', text: 'Every scene already has own media or a local template.' }));
-    }
-    missing.forEach(function (scene) { fillStack.append(fillEditor(scene)); });
-    wrap.append(C.panel('Fill each scene', {
-      subtitle: 'Draw it locally, generate it elsewhere and attach it, or let asset production look for footage. Nothing here spends money.',
-      children: fillStack
-    }));
 
     function runWith(control, label, work) {
       if (control && control.setBusy) control.setBusy(true, label);
@@ -525,52 +530,30 @@
         .catch(function (error) { C.toast(error.message, 'error'); });
     }
 
-    function fillEditor(scene) {
-      var entry = promptsById[scene.id] || {};
-      var folder = ctx.store.snapshot().folder;
+    /* Only material already chosen for this project. Listing the whole library offered files this
+       project has nothing to do with, which is why an empty selection still showed a stray file. */
+    function projectMaterial() {
+      var project = ctx.store.project() || {};
+      var selections = (((project.workflow || {}).materials || {}).selections) || [];
+      var chosen = {};
+      selections.filter(function (item) { return item.decision === 'use'; })
+        .forEach(function (item) { chosen[item.asset_id] = true; });
+      return Object.keys(library).map(function (id) { return library[id]; }).filter(function (asset) {
+        return chosen[asset.id] && asset.publishable !== false && C.rightsState(asset).state !== 'blocked';
+      });
+    }
+
+    /* ---------- the three ways to fill a scene ---------- */
+
+    function localPanel(scene) {
+      var node = el('div', { class: 'stack tight', attrs: { 'data-panel': 'local' } });
+      if (scene.asset_id) {
+        node.append(C.banner('info', 'This scene already uses your own media',
+          'Detach it first if you want it drawn locally instead. Use a file has the detach control.'));
+        return { node: node };
+      }
       var assigned = scene.graphic_template || null;
-      var detail = el('details', { class: 'fill-scene' });
-      detail.append(el('summary', {}, [
-        el('strong', { text: scene.title || scene.id }),
-        el('span', { class: 'metric-note', text: ' ' + (scene.seconds || 0) + 's' }),
-        assigned ? statePill('info', 'Local: ' + assigned) : statePill('review', 'Not filled'),
-        entry.typographic ? el('span', { class: 'metric-note', text: ' · mostly on-screen text' }) : null
-      ]));
-      var body = el('div', { class: 'stack tight' });
-      detail.append(body);
-
-      var promptText = entry.prompt || scene.generation_prompt || '';
-      body.append(el('div', { class: 'row between' }, [
-        el('strong', { text: 'Prompt for a generation tool' }),
-        button('Copy prompt', { size: 'sm', on: function () {
-          C.copyText(promptText).then(function (how) { if (how === 'copied') C.toast('Prompt copied.'); });
-        } })
-      ]));
-      body.append(el('div', { class: 'asset-excerpt', text: promptText || 'The storyboard wrote no prompt for this scene.' }));
-
-      if (entry.typographic) {
-        body.append(C.banner('warn', 'Mostly on-screen text',
-          'A video generator will misspell these words or invent ones that are not in your script. Drawing it locally spells them exactly.'));
-      }
-
-      var profileKeys = Object.keys(profiles);
-      if (profileKeys.length) {
-        var toolSelect = C.select({ id: 'tool-' + scene.id, value: (pack && pack.provider) || 'manual' }, profileKeys.map(function (key) {
-          return { value: key, label: profiles[key].short };
-        }));
-        var notes = el('ul', { class: 'notes' });
-        function renderNotes() {
-          C.clear(notes);
-          var profile = profiles[toolSelect.value] || {};
-          (profile.notes || []).forEach(function (note) { notes.append(el('li', { text: note })); });
-        }
-        toolSelect.addEventListener('change', renderNotes);
-        renderNotes();
-        body.append(C.field('Where you will generate it', toolSelect, { hint: 'The notes change with the tool. The prompt never does.' }));
-        body.append(notes);
-      }
-
-      // --- draw it locally ---
+      var entry = promptsById[scene.id] || {};
       var templateSelect = C.select({ id: 'template-' + scene.id, value: assigned || entry.suggested_template || templates[0] }, templates.map(function (name) {
         return { value: name, label: name };
       }));
@@ -594,7 +577,7 @@
       } });
       var clear = button('Clear', { size: 'sm', disabled: !assigned, on: function () {
         runWith(clear, 'Clearing', function () {
-          return ctx.api.assignGraphic(folder, scene.id, null).then(function () { C.toast('Cleared. Asset production will look for footage instead.'); });
+          return ctx.api.assignGraphic(folder, scene.id, null).then(function () { C.toast('Cleared. This scene needs media again.'); });
         });
       } });
       var preview = button('Render preview', { size: 'sm', on: function () {
@@ -611,15 +594,167 @@
       } });
       var storedPreview = scenePreviews[previewKey(folder, scene.id)];
       if (storedPreview) renderPreviewPlayer(previewHolder, folder, storedPreview);
-      body.append(C.field('Draw it locally instead', templateSelect, { hint: 'A drawing is free, offline, and spells your words exactly. Assigning changes the storyboard, so it needs approval again.' }));
-      body.append(C.field('Data for that template', dataBox, { hint: 'Assigning fills in a starting point where one can be derived; nothing is invented. A chart needs real figures.' }));
-      body.append(el('div', { class: 'row' }, [assign, preview, clear]));
-      body.append(previewHolder);
 
-      // --- attach something generated elsewhere ---
-      var eligible = ctx.store.snapshot().library.filter(function (asset) {
-        return asset.publishable !== false && C.rightsState(asset).state !== 'blocked';
-      });
+      node.append(C.field('Template', templateSelect, { hint: 'A drawing is free, offline, and spells your words exactly. Assigning changes the storyboard, so it needs approval again.' }));
+      node.append(C.field('Data for that template', dataBox, { hint: 'Assigning fills in a starting point where one can be derived; nothing is invented. A chart needs real figures.' }));
+      node.append(el('div', { class: 'row' }, [assign, preview, clear]));
+      node.append(previewHolder);
+      return { node: node };
+    }
+
+    function generatePanel(scene) {
+      var node = el('div', { class: 'stack tight', attrs: { 'data-panel': 'generate' } });
+      /* The caution belongs in the path where the decision is made, and it is about the scene rather
+         than about Comfy, so it is shown whatever state the provider is in. */
+      var entry = promptsById[scene.id] || {};
+      if (entry.typographic) {
+        node.append(C.banner('warn', 'Mostly on-screen text',
+          'A video generator will misspell these words or invent ones that are not in your script. Drawing it locally spells them exactly.'));
+      }
+      if (!comfy) {
+        node.append(el('p', { class: 'metric-note', text: 'Checking the Comfy configuration...' }));
+        return { node: node };
+      }
+      if (!comfy.configured) {
+        node.append(C.banner('warn', 'Add a Comfy API key to generate a scene',
+          'Settings stores the key; the workflow you export from ComfyUI goes in ' + (comfy.workflow_config_path || 'projects/_settings/comfy/workflows.json') + '. The other two paths still work.'));
+        return { node: node };
+      }
+      if (!comfy.workflow_ready) {
+        node.append(C.banner('warn', 'No exported workflow is in place',
+          comfy.workflow_problem || 'Export your ComfyUI workflow with Workflow then Export (API) and save it beside workflows.json.'));
+        return { node: node };
+      }
+      if (scene.asset_id) {
+        node.append(C.banner('info', 'This scene already uses your own media',
+          'Detach it first if you want to generate a replacement. Use a file has the detach control.'));
+        return { node: node };
+      }
+      if (scene.graphic_template) {
+        node.append(C.banner('info', 'This scene is drawn locally',
+          'It is assigned the ' + scene.graphic_template + ' template, which is free. Clear that in Draw locally first if you want to generate instead.'));
+        return { node: node };
+      }
+
+      var statusLine = el('p', { class: 'metric-note', text: 'Checking this scene...' });
+      var controls = el('div', { class: 'stack tight' });
+      var generation = null;
+      var mounted = false;
+      var timer = null;
+      var cancelled = false;
+      function stopWatching() { cancelled = true; if (timer) { clearTimeout(timer); timer = null; } }
+
+      node.append(statusLine);
+      node.append(controls);
+      function paint() {
+        C.clear(controls);
+        var running = generation && generation.active ? generation.active : null;
+        if (running) {
+          statusLine.textContent = 'Generating with ' + running.workflow + ': ' + root.Stages.label(running.status)
+            + (running.progress && typeof running.progress.value === 'number' ? ' (' + Math.round(running.progress.value * 100) + '%)' : '')
+            + '. This continues if you leave the page.';
+          var cancelBtn = button('Cancel the generation', { on: function () {
+            cancelBtn.setBusy(true, 'Cancelling');
+            ctx.api.cancelGeneration(folder, scene.id, running.job_id).then(function () { return load(); })
+              .catch(function (error) { C.toast(error.message, 'error'); })
+              .finally(function () { cancelBtn.setBusy(false); });
+          } });
+          controls.append(el('div', { class: 'row' }, [cancelBtn]));
+          return;
+        }
+        if (generation && generation.imported_asset_id) statusLine.textContent = 'A generated file is attached to this scene.';
+        else if (generation && generation.last_error) {
+          statusLine.textContent = 'The last generation did not produce a file.';
+          controls.append(C.banner('warn', 'The last generation failed', generation.last_error));
+        } else statusLine.textContent = 'Nothing has been generated for this scene yet.';
+
+        var workflows = comfy.workflows || [];
+        var workflowSelect = C.select({ id: 'comfy-workflow-' + scene.id, value: comfy.default_workflow || (workflows[0] ? workflows[0].name : '') },
+          workflows.map(function (item) { return { value: item.name, label: item.name + ' (' + item.output + ')' }; }));
+        var prompt = C.textArea({ id: 'comfy-prompt-' + scene.id, rows: 3, placeholder: 'Describe the shot for the generator.' });
+        prompt.value = scene.generation_prompt || scene.visual_intent || '';
+        var generateBtn = button('Generate this scene', { variant: 'primary', on: function () {
+          generateBtn.setBusy(true, 'Submitting');
+          ctx.api.generateScene(folder, scene.id, { workflow: workflowSelect.value, prompt: prompt.value }).then(function (result) {
+            C.toast('Generation submitted. It costs Comfy credits and takes a few minutes.');
+            generation = { active: { job_id: result.job.job_id, status: result.job.status, workflow: result.job.workflow, progress: null } };
+            paint();
+            watch(result.job.job_id);
+          }).catch(function (error) {
+            C.toast(error.message, 'error');
+          }).finally(function () { generateBtn.setBusy(false); });
+        } });
+        generateBtn.disabled = !String(prompt.value || '').trim();
+        prompt.addEventListener('input', function () { generateBtn.disabled = !String(prompt.value || '').trim(); });
+
+        controls.append(C.field('Workflow', workflowSelect, { hint: 'Each one is a workflow you exported from ComfyUI. Video costs more credits than an image.' }));
+        controls.append(C.field('Prompt', prompt, { hint: 'Sent to the node named in workflows.json. Edit it here without changing the storyboard.' }));
+        controls.append(el('div', { class: 'row' }, [
+          generateBtn,
+          button('Copy prompt', { size: 'sm', on: function () {
+            C.copyText(prompt.value).then(function (how) { if (how === 'copied') C.toast('Prompt copied.'); });
+          } })
+        ]));
+        if (!String(prompt.value || '').trim()) {
+          controls.append(C.banner('warn', 'This scene has no prompt', 'Write one above, or generate the storyboard again so it writes one.'));
+        }
+        controls.append(el('p', { class: 'metric-note', text: 'A run costs Comfy credits and takes minutes. The result is imported as your own generated work and attached to this scene.' }));
+      }
+
+      /* Polls the server, which polls Comfy. Deliberately slow: a GPU job runs for minutes. */
+      function watch(jobId) {
+        if (cancelled) return;
+        ctx.api.generationStatus(folder, scene.id, jobId).then(function (result) {
+          if (cancelled) return;
+          var job = result.job || {};
+          generation = {
+            active: result.done ? null : { job_id: jobId, status: job.status, workflow: job.workflow, progress: job.progress },
+            imported_asset_id: result.attached_asset_id || (generation && generation.imported_asset_id),
+            last_error: job.error || null
+          };
+          if (result.attached_asset_id) {
+            C.toast('The scene was generated and attached.');
+            ctx.loadResults('storyboard').then(function () { ctx.rerender(); });
+            return;
+          }
+          if (result.done) { paint(); return; }
+          paint();
+          timer = setTimeout(function () { watch(jobId); }, 4000);
+        }).catch(function (error) {
+          if (cancelled) return;
+          statusLine.textContent = error.message;
+          C.toast(error.message, 'error');
+        });
+      }
+
+      function load() {
+        return ctx.api.sceneGeneration(folder, scene.id).then(function (result) {
+          generation = result.generation;
+          paint();
+          if (generation && generation.active) watch(generation.active.job_id);
+        }).catch(function (error) { statusLine.textContent = error.message; });
+      }
+
+      return {
+        node: node,
+        // Mounted when you open this path, so a fourteen-scene screen makes one request, not fourteen.
+        onShow: function () {
+          if (mounted) return;
+          mounted = true;
+          activeWatchers.push(stopWatching);
+          load();
+        }
+      };
+    }
+
+    function attachPanel(scene) {
+      var node = el('div', { class: 'stack tight', attrs: { 'data-panel': 'attach' } });
+      if (scene.graphic_template) {
+        node.append(C.banner('info', 'This scene is drawn locally',
+          'It is assigned the ' + scene.graphic_template + ' template, which is free. Clear that in Draw locally first if you want to use a file instead.'));
+        return { node: node };
+      }
+      var eligible = projectMaterial();
       var attachSelect = C.select({ id: 'attach-' + scene.id, value: eligible.length ? eligible[0].id : '' }, eligible.map(function (asset) {
         return { value: asset.id, label: asset.name };
       }));
@@ -628,8 +763,21 @@
           return ctx.api.attachSceneAsset(folder, scene.id, { asset_id: attachSelect.value }).then(function () { C.toast('Attached.'); });
         });
       } });
-      body.append(C.field('Use material already in the library', attachSelect, { hint: eligible.length ? 'Only material whose rights are recorded is offered.' : 'Nothing in the library is rights-cleared yet. Record rights on an item first.' }));
-      body.append(el('div', { class: 'row' }, [attachBtn]));
+      node.append(C.field('Material chosen for this project', attachSelect, {
+        hint: eligible.length
+          ? 'Attaching replaces whatever this scene uses now.'
+          : 'Nothing is chosen for this project yet. Mark files as Use in Own material, and they appear here.'
+      }));
+      node.append(el('div', { class: 'row' }, [attachBtn]));
+
+      if (scene.asset_id) {
+        var detach = button('Detach this scene', { size: 'sm', on: function () {
+          runWith(detach, 'Detaching', function () {
+            return ctx.api.attachSceneAsset(folder, scene.id, { asset_id: null }).then(function () { C.toast('Detached. This scene needs media again.'); });
+          });
+        } });
+        node.append(el('div', { class: 'row' }, [detach]));
+      }
 
       var fileInput = el('input', { type: 'file', id: 'attach-file-' + scene.id, attrs: { 'aria-label': 'Choose a generated file to attach' } });
       fileInput.addEventListener('change', function (event) {
@@ -656,157 +804,82 @@
           });
         });
       });
-      body.append(C.field('Or upload a file you generated', fileInput, { hint: 'Uploading here asks for its licence basis first, because attaching an unrecorded file would be refused.' }));
+      node.append(C.field('Or upload a file you generated', fileInput, { hint: 'Uploading asks for a licence basis first, because attaching an unrecorded file would be refused.' }));
+      return { node: node };
+    }
 
-      // --- generate it here, through Comfy ---
-      body.append(comfyPanel(ctx, scene));
+    function sceneCard(scene) {
+      var state = stateOf(scene);
+      var entry = promptsById[scene.id] || {};
+      var store = fillFor(folder, scene.id);
+      var detail = el('details', { class: 'fill-scene', attrs: { 'data-scene': scene.id, 'data-state': state.id } });
+      detail.open = !!store.open;
+      detail.addEventListener('toggle', function () { store.open = detail.open; });
 
+      detail.append(el('summary', {}, [
+        el('strong', { text: scene.title || scene.id }),
+        el('span', { class: 'metric-note', text: ' ' + (scene.seconds || 0) + 's' }),
+        statePill(state.tone, state.label),
+        entry.typographic ? el('span', { class: 'metric-note', text: ' · mostly on-screen text' }) : null
+      ]));
+
+      var body = el('div', { class: 'stack tight' });
+      detail.append(body);
+      body.append(el('p', { class: 'metric-note', text: state.note }));
+
+      var section = scene.narration_section_id ? narration[scene.narration_section_id] : null;
+      if (section && section.narration) body.append(el('div', { class: 'asset-excerpt', text: String(section.narration).slice(0, 400) }));
+      var meta = [scene.shot_type, scene.visual_intent].filter(Boolean).join(' | ');
+      if (meta) body.append(el('p', { class: 'metric-note', text: meta }));
+      if (scene.on_screen_text) body.append(el('p', { class: 'metric-note', text: 'On screen: ' + scene.on_screen_text }));
+
+      var panels = { local: localPanel(scene), generate: generatePanel(scene), attach: attachPanel(scene) };
+      var paths = ['local', 'generate', 'attach'];
+
+      function apply(path) {
+        detail.setAttribute('data-path', path || '');
+        paths.forEach(function (key) {
+          panels[key].node.hidden = key !== path;
+          buttons[key].setAttribute('aria-pressed', String(key === path));
+        });
+        if (path && panels[path].onShow) panels[path].onShow();
+      }
+      function toggle(path) { store.path = store.path === path ? null : path; apply(store.path); }
+
+      var buttons = {
+        local: button('Draw locally', { size: 'sm', dataset: { path: 'local' }, on: function () { toggle('local'); } }),
+        generate: button('Generate with Comfy', { size: 'sm', dataset: { path: 'generate' }, on: function () { toggle('generate'); } }),
+        attach: button('Use a file', { size: 'sm', dataset: { path: 'attach' }, on: function () { toggle('attach'); } })
+      };
+      body.append(el('div', { class: 'row' }, [buttons.local, buttons.generate, buttons.attach]));
+      paths.forEach(function (key) { body.append(panels[key].node); });
+
+      // Restores whichever panel you were using, without toggling it off.
+      apply(store.path);
       return detail;
     }
+
+    var cardStack = el('div', { class: 'stack tight' });
+    scenes.forEach(function (scene) { cardStack.append(sceneCard(scene)); });
+    wrap.append(C.panel('Scenes', {
+      subtitle: 'Every scene, and the three ways to fill one. Drawing is free and offline; generating costs Comfy credits; using a file attaches something you already have.',
+      children: cardStack
+    }));
 
     var details = el('details');
     details.append(el('summary', { text: 'Supporting files' }));
     details.append(C.resultFiles(saved));
     wrap.append(details);
+
+    /* Every watcher this screen started, stopped together when it is replaced. */
+    ctx.onLeave = function () {
+      var watchers = activeWatchers;
+      activeWatchers = [];
+      watchers.forEach(function (stop) { try { stop(); } catch (error) { /* nothing left to stop */ } });
+    };
     return wrap;
   }
 
-  /* Generating a scene through Comfy, offered beside the other two ways of filling one.
-     The job runs on the server, so leaving the screen does not cancel it and coming back re-attaches. */
-  function comfyPanel(ctx, scene) {
-    var folder = ctx.store.snapshot().folder;
-    var wrap = el('div', { class: 'stack' });
-    var statusLine = el('p', { class: 'metric-note', text: 'Checking Comfy...' });
-    var controls = el('div', { class: 'stack' });
-    var provider = null;
-    var generation = null;
-    var timer = null;
-    var cancelled = false;
-
-    var prompt = C.textArea({ id: 'comfy-prompt-' + scene.id, rows: 3, placeholder: 'Describe the shot for the generator.' });
-    prompt.value = scene.generation_prompt || scene.visual_intent || '';
-    var workflowSelect = null;
-
-    function stopWatching() { cancelled = true; if (timer) { clearTimeout(timer); timer = null; } }
-
-    function paint() {
-      controls.replaceChildren();
-      if (!provider) { statusLine.textContent = 'Checking Comfy...'; return; }
-      if (!provider.configured) {
-        statusLine.textContent = 'Comfy is not configured, so nothing can be generated here.';
-        controls.append(C.banner('warn', 'Add a Comfy API key to generate a scene',
-          'Settings stores the key; the workflow you export from ComfyUI goes in ' + (provider.workflow_config_path || 'projects/_settings/comfy/workflows.json') + '. Without it, use a local template, stock sourcing, or attach a file you generated elsewhere.'));
-        return;
-      }
-      /* The key and the workflow are two different things. A config that names a workflow file which
-         is not there is not a working setup, so it must not offer a generation it cannot deliver. */
-      if (!provider.workflow_ready) {
-        statusLine.textContent = 'Comfy has no usable workflow, so nothing can be generated here.';
-        controls.append(C.banner('warn', 'No exported workflow is in place',
-          provider.workflow_problem || 'Export your ComfyUI workflow with Workflow then Export (API) and save it beside workflows.json.'));
-        return;
-      }
-      if (!provider.workflows || !provider.workflows.length) {
-        statusLine.textContent = 'No Comfy workflow is configured, so nothing can be generated here.';
-        controls.append(C.banner('warn', 'No workflow is configured', provider.workflow_problem || 'Add workflows.json beside your exported API workflow.'));
-        return;
-      }
-
-      var running = generation && generation.active ? generation.active : null;
-
-      if (running) {
-        statusLine.textContent = 'Generating with ' + running.workflow + ': ' + root.Stages.label(running.status)
-          + (running.progress && typeof running.progress.value === 'number' ? ' (' + Math.round(running.progress.value * 100) + '%)' : '')
-          + '. This continues if you leave the page.';
-        var cancelBtn = button('Cancel the generation', { on: function () {
-          cancelBtn.setBusy(true, 'Cancelling');
-          ctx.api.cancelGeneration(folder, scene.id, running.job_id).then(function () { return refresh(); })
-            .catch(function (error) { C.toast(error.message, 'error'); })
-            .finally(function () { cancelBtn.setBusy(false); });
-        } });
-        controls.append(el('div', { class: 'row' }, [cancelBtn]));
-        return;
-      }
-
-      // A finished job updates the scene through the server, so the view only has to reload it.
-      if (generation && generation.imported_asset_id) {
-        statusLine.textContent = 'A generated file is attached to this scene.';
-      } else if (generation && generation.last_error) {
-        statusLine.textContent = 'The last generation did not produce a file.';
-        controls.append(C.banner('warn', 'The last generation failed', generation.last_error));
-      } else if (scene.asset_id || scene.graphic_template) {
-        statusLine.textContent = scene.asset_id
-          ? 'This scene already has own media, so generating would replace it. Detach it first.'
-          : 'This scene is drawn locally by a template, which is free. Clear that first to generate instead.';
-        return;
-      } else {
-        statusLine.textContent = 'Nothing has been generated for this scene yet.';
-      }
-
-      if (scene.asset_id || scene.graphic_template) return;
-
-      workflowSelect = C.select({ id: 'comfy-workflow-' + scene.id, value: provider.default_workflow || provider.workflows[0].name },
-        provider.workflows.map(function (item) { return { value: item.name, label: item.name + ' (' + item.output + ')' + (item.exists ? '' : ' - file missing') }; }));
-
-      var generateBtn = button('Generate this scene', { variant: 'primary', on: function () {
-        generateBtn.setBusy(true, 'Submitting');
-        ctx.api.generateScene(folder, scene.id, { workflow: workflowSelect.value, prompt: prompt.value }).then(function (result) {
-          C.toast('Generation submitted. It costs Comfy credits and takes a few minutes.');
-          generation = { active: { job_id: result.job.job_id, status: result.job.status, workflow: result.job.workflow, progress: null } };
-          paint();
-          watch(result.job.job_id);
-        }).catch(function (error) {
-          C.toast(error.message, 'error');
-          paint();
-        }).finally(function () { generateBtn.setBusy(false); });
-      } });
-
-      controls.append(C.field('Workflow', workflowSelect, { hint: 'Each one is a workflow you exported from ComfyUI. Video uses more credits than an image.' }));
-      controls.append(C.field('Prompt', prompt, { hint: 'Sent to the node named in workflows.json. Edit it here without changing the storyboard.' }));
-      controls.append(el('div', { class: 'row' }, [generateBtn]));
-      controls.append(el('p', { class: 'metric-note', text: 'A run costs Comfy credits and takes minutes. The result is imported as your own generated work and attached to this scene.' }));
-    }
-
-    /* Polls the server, which polls Comfy. The cadence is deliberately slow: a GPU job runs for
-       minutes and does not need to be asked about every second. */
-    function watch(jobId) {
-      if (cancelled) return;
-      ctx.api.generationStatus(folder, scene.id, jobId).then(function (result) {
-        if (cancelled) return;
-        var job = result.job || {};
-        generation = { active: result.done ? null : { job_id: jobId, status: job.status, workflow: job.workflow, progress: job.progress }, imported_asset_id: result.attached_asset_id || generation && generation.imported_asset_id, last_error: job.error || null };
-        if (result.attached_asset_id) {
-          C.toast('The scene was generated and attached.');
-          ctx.loadResults('storyboard').then(function () { ctx.rerender(); });
-          return;
-        }
-        if (result.done) { paint(); return; }
-        paint();
-        timer = setTimeout(function () { watch(jobId); }, 4000);
-      }).catch(function (error) {
-        if (cancelled) return;
-        statusLine.textContent = error.message;
-        generatorError(error);
-      });
-    }
-
-    function generatorError(error) { C.toast(error.message, 'error'); }
-
-    function refresh() {
-      return ctx.api.sceneGeneration(folder, scene.id).then(function (result) {
-        provider = result.comfy;
-        generation = result.generation;
-        paint();
-        if (generation && generation.active) watch(generation.active.job_id);
-      }).catch(function (error) { statusLine.textContent = error.message; });
-    }
-
-    wrap.append(statusLine);
-    wrap.append(controls);
-    refresh();
-    ctx.onLeave = stopWatching;
-    return wrap;
-  }
   function render(ctx, stageId) {
     return renderProvider(ctx, stageId);
   }

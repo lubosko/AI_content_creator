@@ -154,23 +154,24 @@ the words survive. See [Exports](docs/EXPORTS.md).
 
 ## Filling a scene
 
-Every scene that has no own media can be filled in four ways, and the storyboard stage offers them
-side by side:
+Every scene gets a card, and each card offers the ways to fill it as buttons — only the one you choose
+opens, so a long storyboard stays readable:
 
-- **Drawn locally.** Assign one of six templates — text card, bar chart, terminal, diagram, split
+- **Draw locally.** Assign one of six templates — text card, bar chart, terminal, diagram, split
   comparison, end card — and the app draws it with headless Chrome and FFmpeg, for free, offline, and
   spelling your words exactly. This is the right answer for the graphic and typographic scenes that
   make up most of a technical explainer, where a video generator would misspell the on-screen text.
-- **Generated here, through Comfy.** Export an API workflow from ComfyUI, point the app at it, and
-  generate the shot from the scene panel. It costs credits and takes minutes, and the result is
-  attached to the scene as your own generated work.
-- **Generated elsewhere, then attached.** Copy the scene prompt into Leonardo or Mootion, and attach
-  the result. The prompt is quoted verbatim, the tool notes are labelled as unverified guidance, and
-  the licence basis is recorded before the file can be attached.
-- **Footage sourcing**, from the free-licence sources above, for photoreal shots.
+- **Generate with Comfy.** Export an API workflow from ComfyUI, point the app at it, and generate the
+  shot from the card. It costs credits and takes minutes, and the result is attached to the scene as
+  your own generated work.
+- **Use a file.** Attach material you chose for this project, upload a file you generated elsewhere
+  (Leonardo, Mootion, anything), or detach what the scene uses now. The prompt pack, with per-tool
+  notes, is here.
 
-A preview is free and changes nothing; assigning a template is a plan change and needs approval
-again. See [Scene rendering](docs/SCENE_RENDERING.md).
+A scene is described in one vocabulary everywhere — **Your media**, **Drawn locally**, **Generated**
+or **Needs media** — and a card stays open while you work in it. A preview is free and changes
+nothing; assigning a template is a plan change and needs approval again. See
+[Scene rendering](docs/SCENE_RENDERING.md).
 
 ## Settings
 

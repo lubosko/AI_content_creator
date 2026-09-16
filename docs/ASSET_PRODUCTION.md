@@ -85,6 +85,12 @@ Asset production never reports success it did not achieve.
 - A source that could not be used is reported with its real reason, not omitted: *"Pexels was not
   searched: No Pexels API key is configured."* The manifest carries a `sourcing` block listing every
   source that was searched and every one that was not.
+- **A miss is reported per source, not as one sentence.** A scene that found nothing records
+  `sourced_after` — each source that was asked and what it answered — plus the `query` that was tried,
+  so the assets screen can list *"Archive.org — searched, no item matched"* separately from
+  *"Pexels — not searched: no API key"*. Those are different problems: one you cannot fix by
+  searching again, the other is a missing key. Only the "nothing matched" line is styled as a failure;
+  a source that was never consulted is a note, because nothing about the scene broke.
 - A failed search produces a `failed` record carrying the per-source reasons.
 - A failed narration section does not discard the audio already produced.
 - Every scene that has media also carries `media: {kind, duration_seconds, width, height}`, so the

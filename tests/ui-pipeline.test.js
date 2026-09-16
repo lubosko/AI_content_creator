@@ -134,10 +134,21 @@ async function run() {
     assert.equal(entry.disabled, false, 'with a project open the action is available');
     // The visible label lives in the shell (index.html), which tests/ui-browser.test.js drives for real.
 
-    // --- the Comfy control on a scene that needs media ---
+    // --- the Comfy path on a scene that needs media ---
     const viewText = ui.text(ui.document.getElementById('viewBody'));
-    assert.ok(viewText.indexOf('Comfy') >= 0, 'the scene panel must offer generation');
-    await ui.settle(() => ui.text(ui.document.getElementById('viewBody')).indexOf('Nothing has been generated for this scene yet') >= 0, {description: 'the Comfy panel to load its status', timeout: 8000});
+    assert.ok(viewText.indexOf('Generate with Comfy') >= 0, 'the scene card must offer generation');
+    // Re-queried each time: opening this path fetches the Comfy status, and the render that follows
+    // replaces the node, so a held reference would go stale.
+    const cardFor = sceneId => Array.prototype.filter.call(ui.document.querySelectorAll('.fill-scene'), node => node.getAttribute('data-scene') === sceneId)[0];
+    const sceneCard = cardFor('scene_two');
+    assert.ok(sceneCard, 'the scene card must be findable');
+    sceneCard.open = true;
+    sceneCard.dispatch('toggle', {});
+    Array.prototype.filter.call(sceneCard.querySelectorAll('button'), node => ui.text(node).trim() === 'Generate with Comfy')[0].click();
+    assert.equal(sceneCard.getAttribute('data-path'), 'generate', 'the generate path opens');
+
+    // The panel is mounted on demand, so this is the first request it makes for this scene.
+    await ui.settle(() => cardFor('scene_two') && ui.text(cardFor('scene_two')).indexOf('Nothing has been generated for this scene yet') >= 0, {description: 'the Comfy panel to load its status', timeout: 8000});
     const workflowSelect = ui.byId('comfy-workflow-scene_two');
     assert.ok(workflowSelect, 'the workflow configured on the server must be offered');
     assert.equal(workflowSelect.value, 'image');
@@ -145,11 +156,12 @@ async function run() {
     assert.ok(ui.byId('comfy-prompt-scene_two'), 'the prompt must be editable here');
     assert.equal(ui.byId('comfy-prompt-scene_two').value, 'a robot arm on a workbench', 'the prompt is pre-filled from the storyboard');
     assert.ok((ui.findAll('button') || []).some(node => ui.text(node) === 'Generate this scene'), 'the generate action must be offered');
-    const cost = ui.text(ui.document.getElementById('viewBody'));
-    assert.ok(cost.indexOf('costs Comfy credits') >= 0, 'the cost must be stated before it is spent');
+    assert.ok(ui.text(cardFor('scene_two')).indexOf('costs Comfy credits') >= 0, 'the cost must be stated before it is spent');
 
     // The scene drawn locally must not be offered a paid generation.
-    assert.equal(ui.byId('comfy-workflow-scene_one'), null, 'a scene with a template is not offered generation');
+    assert.ok(ui.text(ui.document.getElementById('viewBody')).indexOf('It is assigned the text-card template, which is free. Clear that in Draw locally first if you want to generate instead.') >= 0,
+      'a scene with a template is told why generating is not the way to replace it');
+    assert.equal(ui.byId('comfy-workflow-scene_one'), null, 'a scene with a template is not offered a workflow');
 
     /* A workflows.json that names a file which is not there is not a working setup: the panel must say
        so rather than offering a generation the app cannot deliver. */

@@ -32,6 +32,10 @@
     } catch (error) {
       Store.patch({ resultsLoading: null });
       Store.setError(step, error.message);
+    } finally {
+      // Recorded whether it worked or not, so a failed load is reported once instead of being
+      // re-requested by every render that follows.
+      Store.markAttempted(step);
     }
   }
 
@@ -312,10 +316,11 @@
       if (root.console) root.console.error(error);
     }
 
-    // Load the saved result only when the store does not already have it.
+    // Load the saved result only when the store does not already have it, and only once: a load that
+    // failed must not be retried by every render that follows.
     if (viewKey === 'stage') {
       var serverStep = root.Stages.byId(stageId).server;
-      if (serverStep && !Store.snapshot().results[serverStep] && Store.snapshot().resultsLoading !== serverStep) {
+      if (serverStep && !Store.snapshot().results[serverStep] && !Store.snapshot().resultsAttempted[serverStep] && Store.snapshot().resultsLoading !== serverStep) {
         loadResults(serverStep).then(function () { render(); });
       }
     }

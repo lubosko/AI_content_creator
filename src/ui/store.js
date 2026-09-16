@@ -17,6 +17,10 @@
     maxUploadBytes: 0,
     settings: null,
     results: {},
+    /* Steps whose results have been asked for at least once, successfully or not. Without this the
+       render-time guard reads "no result yet" for a load that already failed, and asks again on every
+       render - a request-and-render loop that never terminates. */
+    resultsAttempted: {},
     errors: {}
   };
 
@@ -44,6 +48,7 @@
 
   function setResult(step, value) { state.results[step] = value; emit(); }
   function setError(step, message) { if (message) state.errors[step] = message; else delete state.errors[step]; emit(); }
+  function markAttempted(step) { state.resultsAttempted[step] = true; }
 
   /* Busy is a counter so overlapping operations cannot clear each other's lock. */
   var busyCount = 0;
@@ -56,14 +61,14 @@
 
   function resetProject() {
     state.folder = null; state.intake = null; state.brief = null;
-    state.results = {}; state.errors = {};
+    state.results = {}; state.resultsAttempted = {}; state.errors = {};
     emit();
   }
 
   root.Store = {
     snapshot: snapshot, subscribe: subscribe, patch: patch,
     project: project, workflow: workflow, revision: revision, stageState: stageState,
-    setResult: setResult, setError: setError, begin: begin, end: end,
+    setResult: setResult, setError: setError, markAttempted: markAttempted, begin: begin, end: end,
     rememberLast: rememberLast, lastProject: lastProject, resetProject: resetProject
   };
 })(window);

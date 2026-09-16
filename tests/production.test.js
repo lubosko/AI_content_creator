@@ -103,7 +103,16 @@ async function run() {
     search: async ({query}) => {
       searchCalls++;
       // The second search fails, so one scene is produced and one is reported as failed.
-      if (searchCalls === 2) return {ok: false, reason: 'No stock footage matched that description.'};
+      // `attempts` is what the real sourcing chain returns, and it is what lets the interface say
+      // which source was asked and which was never consulted.
+      if (searchCalls === 2) return {
+        ok: false,
+        reason: 'No stock footage matched that description.',
+        attempts: [
+          {provider: 'pexels', short: 'Pexels', reason: 'No stock footage matched that description.', retryable: false},
+          {provider: 'archive', short: 'Archive.org', reason: 'No Archive.org item matched that description.', retryable: false}
+        ]
+      };
       return {ok: true, clip: {provider: 'pexels', provider_id: '1', url: clipPath, page_url: 'https://example.com/clip', width: 1920, height: 1080, duration_seconds: 3, author: 'Tester', licence: 'Pexels licence', attribution_required: false, query}};
     },
     download: async ({url, targetPath}) => ({path: (fs.mkdirSync(path.dirname(targetPath), {recursive: true}), fs.copyFileSync(url, targetPath), targetPath), bytes: fs.statSync(targetPath).size})
@@ -139,6 +148,9 @@ async function run() {
   assert.ok(producedScene.clip.licence, 'The licence must be recorded');
   const failedScene = manifest.scenes.find(scene => scene.status === 'failed');
   assert.match(failedScene.reason, /No stock footage matched/);
+  assert.ok(Array.isArray(failedScene.sourced_after), 'A failed scene must record which sources were tried, so the interface does not have to unpack one sentence');
+  assert.deepEqual(failedScene.sourced_after.map(item => item.short), ['Pexels', 'Archive.org'], 'In the order they were tried');
+  assert.match(failedScene.sourced_after[0].reason, /No stock footage matched/);
   assert.ok(manifest.warnings.some(warning => /no narration text/.test(warning)), 'Warnings must state the gaps: ' + manifest.warnings.join(' | '));
 
   // The asset index keeps provenance for the composer and for attribution.
