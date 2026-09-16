@@ -100,7 +100,13 @@
         if (gate) {
           payload.subject = subject;
           if (gate === 'master_video') {
-            payload.confirmed = Object.keys(boxes).filter(function (id) { return boxes[id].checked; });
+            /* The checkbox controls are keyed with a "confirm-" prefix so they cannot collide with
+               anything else in this panel, and the server wants the check ids themselves. Sending the
+               prefixed keys meant every confirmable item was reported as still missing - however many
+               times you ticked them, the same five names came back. */
+            payload.confirmed = manual
+              .filter(function (item) { return boxes['confirm-' + item.id] && boxes['confirm-' + item.id].checked; })
+              .map(function (item) { return item.id; });
           }
         } else {
           payload.stage_revision = record.revision;
@@ -129,8 +135,6 @@
     // The approval cannot proceed while a blocking check stands, or before the manual items are ticked.
     var blocked = !!(check && (check.blocking_issues || []).length);
     if (gate === 'master_video' && manual.length) {
-      var missing = manual.filter(function (item) { return !boxes['confirm-' + item.id]; });
-      void missing;
       approveBtn.disabled = blocked;
       var list = el('div', { class: 'stack tight' });
       manual.forEach(function (item) {

@@ -141,6 +141,17 @@ async function run() {
     confirmations.forEach(node => { node.checked = true; node.change(); });
     assert.equal(approve.disabled, false, 'confirming every item must enable approval');
 
+    /* And the confirmations must actually reach the server as its own check ids. Ticking every box
+       and then posting the panel's internal control keys ("confirm-watched") made the server report
+       all of them as still missing however many times they were ticked - and this test passed, because
+       it only ever looked at whether the button was enabled. The refusal is what reaches the operator,
+       as a toast, so the toast is what is asserted. */
+    approve.click();
+    const toastText = () => ui.text(ui.document.getElementById('toasts'));
+    await ui.settle(() => toastText().indexOf('Approved') >= 0 || toastText().indexOf('asserting') >= 0, {description: 'the approval to be answered', timeout: 8000});
+    assert.equal(toastText().indexOf('you are asserting before approving'), -1,
+      'the confirmations must arrive as the checklist ids the server asks for, got: ' + toastText());
+
     // --- the exports screen ---
     ui.navigate('#/project/' + encodeURIComponent(folder) + '/exports');
     await ui.settle(() => text(ui.document.getElementById('viewBody')).indexOf('YouTube Shorts') >= 0, {description: 'the exports list', timeout: 8000});
