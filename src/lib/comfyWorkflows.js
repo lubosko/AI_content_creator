@@ -15,6 +15,10 @@ const path = require('node:path');
 const comfy = require('../providers/comfy');
 
 const OUTPUT_KINDS = ['image', 'video'];
+/* What a workflow is for. "text" marks one the operator trusts to render words legibly, so a scene
+   whose picture is mostly on-screen words can be sent there instead of to the general model. The
+   model that draws a beautiful chart is usually not the one that spells a product name correctly. */
+const PURPOSES = ['general', 'text'];
 
 function fail(message, status = 409) { throw Object.assign(new Error(message), {status}); }
 
@@ -59,6 +63,10 @@ function loadConfig(projectsRoot) {
     if (!OUTPUT_KINDS.includes(output)) {
       return {ok: false, path: file, directory, exists: true, config, problem: 'Workflow "' + name + '" declares output "' + output + '". Choose ' + OUTPUT_KINDS.join(' or ') + '.'};
     }
+    const purpose = String(entry.purpose || 'general');
+    if (!PURPOSES.includes(purpose)) {
+      return {ok: false, path: file, directory, exists: true, config, problem: 'Workflow "' + name + '" declares purpose "' + purpose + '". Choose ' + PURPOSES.join(' or ') + '.'};
+    }
     const workflowFile = String(entry.file || '').trim();
     if (!workflowFile || /[\\/]/.test(workflowFile) || workflowFile.includes('..')) {
       return {ok: false, path: file, directory, exists: true, config, problem: 'Workflow "' + name + '" needs a plain "file" name inside ' + directory + '.'};
@@ -69,6 +77,7 @@ function loadConfig(projectsRoot) {
       path: path.join(directory, workflowFile),
       exists: fs.existsSync(path.join(directory, workflowFile)),
       output,
+      purpose,
       prompt_node: entry.prompt_node === undefined || entry.prompt_node === null ? null : String(entry.prompt_node),
       prompt_field: String(entry.prompt_field || 'text'),
       output_node: entry.output_node === undefined || entry.output_node === null ? null : String(entry.output_node),
@@ -91,6 +100,9 @@ function workflowSummary(projectsRoot) {
      generation the app cannot deliver. So usability is decided by the files, not by the config. */
   const usable = loaded.workflows.filter(item => item.exists);
   const fallback = loaded.workflows.find(item => item.name === loaded.default);
+  /* A workflow marked for text is only worth naming if it can actually run: pointing a scene at a
+     file that was never saved would turn a working generation into a refusal. */
+  const textWorkflow = loaded.workflows.find(item => item.purpose === 'text' && item.exists);
   let problem = null;
   if (!usable.length) {
     problem = 'No exported workflow file was found. Save your ComfyUI export (Workflow then Export (API)) as '
@@ -104,12 +116,22 @@ function workflowSummary(projectsRoot) {
     problem,
     path: loaded.path,
     default: loaded.default,
+    text_workflow: textWorkflow ? textWorkflow.name : null,
     base_url: (loaded.config && loaded.config.base_url) || null,
     workflows: loaded.workflows.map(item => ({
-      name: item.name, output: item.output, file: item.file, exists: item.exists,
+      name: item.name, output: item.output, purpose: item.purpose, file: item.file, exists: item.exists,
       prompt_node: item.prompt_node, prompt_field: item.prompt_field
     }))
   };
+}
+
+/* The workflow a scene whose picture is mostly words should be sent to, when the operator has
+   configured one. Null means "use the default", which is the honest answer when nothing was marked. */
+function textWorkflowName(projectsRoot) {
+  const loaded = loadConfig(projectsRoot);
+  if (!loaded.ok) return null;
+  const found = loaded.workflows.find(item => item.purpose === 'text' && item.exists);
+  return found ? found.name : null;
 }
 
 /* Loads one workflow and prepares the graph for submission: the prompt is injected into a copy, so
@@ -142,4 +164,4 @@ function buildSubmission({projectsRoot, name, prompt}) {
   };
 }
 
-module.exports = {OUTPUT_KINDS, configDirectory, configPath, loadConfig, workflowSummary, buildSubmission, fail};
+module.exports = {OUTPUT_KINDS, PURPOSES, configDirectory, configPath, loadConfig, workflowSummary, textWorkflowName, buildSubmission, fail};

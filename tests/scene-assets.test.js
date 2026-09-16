@@ -12,6 +12,7 @@ const {execFileSync} = require('node:child_process');
 const {createServer} = require('../src/server');
 const {detectMediaTools} = require('../src/config/capabilities');
 const sceneAssets = require('../src/lib/sceneAssets');
+const stages = require('../src/lib/stages');
 const licensing = require('../src/lib/licensing');
 const frameRenderer = require('../src/lib/frameRenderer');
 
@@ -155,6 +156,54 @@ async function testHeuristics() {
   assert.equal(sceneAssets.isTypographic({generation_prompt: 'wide shot of an empty factory floor'}), false);
   assert.deepEqual(frameRenderer.TEMPLATES, sceneAssets.GRAPHIC_TEMPLATES, 'The renderer and the plan vocabulary must not drift apart');
   console.log('  heuristics: template choice, typographic flag, and the 100% regression');
+}
+
+/* A template the scene cannot fill used to survive the whole storyboard, get approved, and only fail
+   when the scene was finally drawn - asking the operator to supply figures the model never had. */
+async function testTemplateNormalisation() {
+  const chart = {id: 'bench', title: 'Benchmark', graphic_template: 'bar-chart', graphic_data: {bars: [], footnote: '', options: {}}, on_screen_text: 'Bulk CPU data: up to 20-60x faster than ROS2*', template_source: 'provider'};
+  const definition = {id: 'def', title: 'Definition', graphic_template: 'diagram', graphic_data: {nodes: [], edges: [], options: {}}, on_screen_text: 'Dora-rs: Dataflow-Oriented Robotic Architecture', template_source: 'provider'};
+  const flow = {id: 'flow', title: 'Flow', graphic_template: 'diagram', graphic_data: null, on_screen_text: 'teleoperate -> record -> replay', template_source: 'provider'};
+  const filled = {id: 'ok', title: 'Chart', graphic_template: 'bar-chart', graphic_data: {bars: [{label: 'ROS2', value: 100}, {label: 'Dora-rs', value: 380}]}, on_screen_text: 'ROS2=100 / Dora-rs=380', template_source: 'provider'};
+  /* The operator is allowed to assign a template and fill the data in afterwards. That decision is
+     theirs, so nothing automatic may replace it. */
+  const theirs = {id: 'mine', title: 'Mine', graphic_template: 'bar-chart', graphic_data: {bars: []}, on_screen_text: 'no figures here', template_source: 'operator'};
+
+  const first = sceneAssets.normaliseTemplates([chart, definition, flow, filled, theirs]);
+  const byId = new Map(first.scenes.map(scene => [scene.id, scene]));
+
+  assert.equal(byId.get('bench').graphic_template, 'text-card', 'A chart with no figures becomes a text card');
+  assert.equal(byId.get('bench').template_from, 'bar-chart', 'What it replaced is recorded');
+  assert.equal(byId.get('bench').template_auto, true);
+  assert.match(byId.get('bench').template_reason, /at least two entries/);
+  assert.match(sceneAssets.templateNote(byId.get('bench')), /^Drawn locally as text-card\. bar-chart could not be filled/);
+  assert.equal(sceneAssets.validateGraphicData('text-card', byId.get('bench').graphic_data), null, 'The fallback renders');
+
+  assert.equal(byId.get('def').graphic_template, 'text-card', 'A diagram of a definition has no flow to draw');
+  /* A flow genuinely present in the scene's own words is derived, so the template survives. */
+  assert.equal(byId.get('flow').graphic_template, 'diagram', 'A diagram whose steps are in the text is kept');
+  assert.equal(byId.get('flow').graphic_data.nodes.length, 3);
+  assert.equal(byId.get('flow').template_derived, true);
+  assert.equal(byId.get('ok').graphic_data, filled.graphic_data, 'Supplied data is never rebuilt');
+  assert.equal(byId.get('ok').graphic_template, 'bar-chart');
+  assert.equal(byId.get('mine').graphic_data, theirs.graphic_data, 'An operator\'s own template is left exactly as they left it');
+  assert.equal(byId.get('mine').template_auto, undefined);
+
+  assert.equal(first.changes.length, 3, 'Two substitutions and one derivation, got: ' + JSON.stringify(first.changes.map(c => c.scene_id)));
+  assert.deepEqual(first.changes.map(c => c.kind), ['substituted', 'substituted', 'derived']);
+  assert.equal(first.changes.filter(c => c.kind === 'substituted').length, 2, 'Only a substitution changes the picture the model asked for');
+
+  /* Idempotent, so every reader of the board can apply it without the second read disagreeing. */
+  const second = sceneAssets.normaliseTemplates(first.scenes);
+  assert.equal(second.changes.length, 0, 'Normalising twice changes nothing the second time');
+  assert.equal(second.scenes[0], first.scenes[0], 'An unchanged scene is handed back as the same object');
+  const boardTwice = sceneAssets.normaliseBoard(sceneAssets.normaliseBoard({scenes: [chart]}).board);
+  assert.equal(boardTwice.board.scenes, boardTwice.board.scenes);
+
+  // Never invented: the chart is not filled with plausible numbers.
+  assert.equal(byId.get('bench').graphic_data.bars, undefined, 'A chart is never given invented figures');
+
+  console.log('  templates: derived where the words allow it, replaced by a text card where they do not, and the operator\'s own choice untouched');
 }
 
 async function testGraphicData() {
@@ -365,6 +414,60 @@ async function testAttachAndDetach() {
   });
 }
 
+/* Nothing in this app can read text out of a generated picture, so a generated scene that puts words
+   on screen is recorded as unverified - with the words named - rather than passing as though some
+   check had looked at it and approved. */
+async function testGeneratedTextUnverified() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'generated-text-'));
+  try {
+    fs.mkdirSync(path.join(root, 'generated/audio'), {recursive: true});
+    fs.mkdirSync(path.join(root, 'generated/video'), {recursive: true});
+    const result = await stages.production({
+      script: {sections: []},
+      storyboard: {scenes: [
+        {id: 'words', title: 'Warning label', seconds: 6, asset_id: 'asset_gen', on_screen_text: 'Dora-rs: read the manual', visual_intent: 'A warning label'},
+        {id: 'plain', title: 'Factory', seconds: 6, asset_id: 'asset_gen', on_screen_text: '', visual_intent: 'A wide shot of an empty factory floor'}
+      ]},
+      audioDir: path.join(root, 'generated/audio'),
+      videoDir: path.join(root, 'generated/video'),
+      projectDirectory: root,
+      rightsOf: () => ({basis: 'generated', holder: 'Comfy Cloud'}),
+      assetOf: () => ({id: 'asset_gen', name: 'generated.png', mime: 'image/png', analysis: {media: {kind: 'image'}}}),
+      previousRenders: [],
+      speech: null,
+      stock: null,
+      renderGraphic: async () => { throw new Error('a scene with own media must never be drawn'); }
+    });
+    const manifest = JSON.parse(result.outputs['generated/asset_manifest.json']);
+    const words = manifest.scenes.find(scene => scene.scene_id === 'words');
+    const plain = manifest.scenes.find(scene => scene.scene_id === 'plain');
+
+    assert.equal(words.generated_text_unverified, true, 'A generated scene with words on screen is unverified');
+    assert.equal(words.generated_text_words, 'Dora-rs: read the manual', 'and the words are named, so the check is answerable');
+    assert.equal(plain.generated_text_unverified, false, 'A generated scene with no words on screen has nothing to check');
+    assert.equal(manifest.counts.generated_text_unverified, 1);
+    assert.equal(manifest.generated_text_unverified.length, 1);
+    assert.ok(manifest.warnings.some(warning => /nobody has checked/.test(warning)), 'The warning must reach the assets screen');
+    assert.ok(manifest.warnings.some(warning => /cannot read text out of a picture/.test(warning)), 'and must say why it is not checked for you');
+
+    // An own recording is not "generated", so nothing about it is unverified.
+    const own = await stages.production({
+      script: {sections: []},
+      storyboard: {scenes: [{id: 'words', title: 'Warning label', seconds: 6, asset_id: 'asset_own', on_screen_text: 'Dora-rs: read the manual', visual_intent: 'A warning label'}]},
+      audioDir: path.join(root, 'generated/audio'),
+      videoDir: path.join(root, 'generated/video'),
+      projectDirectory: root,
+      rightsOf: () => ({basis: 'own'}),
+      assetOf: () => ({id: 'asset_own', name: 'my-footage.mp4', mime: 'video/mp4', analysis: {media: {kind: 'video'}}}),
+      previousRenders: [], speech: null, stock: null,
+      renderGraphic: async () => { throw new Error('a scene with own media must never be drawn'); }
+    });
+    const ownManifest = JSON.parse(own.outputs['generated/asset_manifest.json']);
+    assert.equal(ownManifest.scenes[0].generated_text_unverified, false, 'Material you shot yourself is not unverified generated text');
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  console.log('  generated text: recorded as unverified with the words named, and only where words exist');
+}
+
 async function testProductionAndPreview() {
   await withServer(async ({baseUrl, projectsRoot, state}) => {
     const folder = await buildApprovedStoryboard(baseUrl, projectsRoot, state);
@@ -442,11 +545,13 @@ async function testProductionAndPreview() {
 
 async function run() {
   await testHeuristics();
+  await testTemplateNormalisation();
   await testGraphicData();
   await testPromptPack();
   await testAssignGraphic();
   await testAttachAndDetach();
+  await testGeneratedTextUnverified();
   await testProductionAndPreview();
-  console.log('All scene asset tests passed: heuristics, prompt pack, assignment, attachment, production precedence (mock network, injected renderer).');
+  console.log('All scene asset tests passed: heuristics, template normalisation, prompt pack, assignment, attachment, unverified generated text, production precedence (mock network, injected renderer).');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

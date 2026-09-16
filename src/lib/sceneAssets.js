@@ -163,6 +163,79 @@ function defaultGraphicData(template, scene) {
   return {data: {}, options: {reveal}};
 }
 
+/* ---------- a template the scene can actually fill ---------- */
+
+/* What a scene falls back to when the data its template needs cannot be derived from anything the
+   scene already says. It draws the scene's own on-screen words, so it always renders and never asks
+   anyone to type anything. */
+const NO_DATA_TEMPLATE = 'text-card';
+
+/* A template that needs data the scene does not contain is worse than no template at all. It passes
+   the storyboard, gets approved, and only fails when the scene is finally drawn - asking the operator
+   to supply figures the model never had, minutes or days after the plan was agreed. So the check
+   happens here, while the scene's own words are still in hand.
+
+   Derivation first. When nothing can honestly be derived, the scene falls back to a template that
+   draws those words and needs no data. Nothing is invented: an empty chart is never filled with
+   plausible numbers, because a chart of made-up figures in a technical explainer is worse than no
+   chart.
+
+   A template the operator assigned by hand is left exactly as they left it. They are allowed to
+   assign incomplete data on purpose and fill it in afterwards; that is their decision to make, and
+   the interface already tells them what is still missing.
+
+   Pure and idempotent, so every reader of the board can apply it and they will all agree. */
+function normaliseTemplates(scenes) {
+  const changes = [];
+  const normalised = (scenes || []).map(scene => {
+    if (!scene || !scene.graphic_template) return scene;
+    if (scene.template_source === 'operator') return scene;
+    const supplied = scene.graphic_data && typeof scene.graphic_data === 'object' && !Array.isArray(scene.graphic_data) ? scene.graphic_data : null;
+    let data = supplied;
+    if (validateGraphicData(scene.graphic_template, supplied)) {
+      const derived = defaultGraphicData(scene.graphic_template, scene);
+      data = Object.assign({}, derived.data, supplied || {}, {
+        options: Object.assign({}, derived.options, (supplied && supplied.options) || {})
+      });
+    }
+    const problem = validateGraphicData(scene.graphic_template, data);
+    if (!problem) {
+      // The template stands. Nothing changed, so the scene is handed back untouched.
+      if (data === supplied) return scene;
+      changes.push({scene_id: scene.id, kind: 'derived', from: scene.graphic_template, to: scene.graphic_template, reason: null});
+      return Object.assign({}, scene, {template_source: 'provider', graphic_data: data, template_derived: true});
+    }
+    const fallback = defaultGraphicData(NO_DATA_TEMPLATE, scene);
+    changes.push({scene_id: scene.id, kind: 'substituted', from: scene.graphic_template, to: NO_DATA_TEMPLATE, reason: problem});
+    return Object.assign({}, scene, {
+      graphic_template: NO_DATA_TEMPLATE,
+      graphic_data: Object.assign({}, fallback.data, {options: fallback.options}),
+      template_source: 'provider',
+      template_from: scene.graphic_template,
+      template_reason: problem,
+      template_auto: true
+    });
+  });
+  return {scenes: normalised, changes};
+}
+
+/* The same over a whole board, for callers that read the file rather than a scene list. Returns the
+   board it was given when nothing needed doing, so an untouched board is never rebuilt. */
+function normaliseBoard(board) {
+  if (!board || !Array.isArray(board.scenes)) return {board, changes: []};
+  const result = normaliseTemplates(board.scenes);
+  if (!result.changes.length) return {board, changes: []};
+  return {board: Object.assign({}, board, {scenes: result.scenes}), changes: result.changes};
+}
+
+/* What to say about an automatic decision, in one sentence, wherever the scene is shown. Null when
+   the scene's template was the operator's own choice. */
+function templateNote(scene) {
+  if (!scene || !scene.template_auto) return null;
+  return 'Drawn locally as ' + scene.graphic_template + '. ' + (scene.template_from || 'The assigned template')
+    + ' could not be filled — ' + (scene.template_reason || 'its data was missing');
+}
+
 /* The scenes the storyboard left without own media: exactly the ones that need filling. */
 function scenesNeedingMedia(scenes) {
   return (scenes || []).filter(scene => !scene.asset_id);
@@ -265,7 +338,7 @@ function promptPackMarkdown(pack) {
 }
 
 module.exports = {
-  GRAPHIC_TEMPLATES, graphicTemplates, isGraphicTemplate, TOOL_PROFILES, toolProfiles, profileFor,
-  isTypographic, suggestTemplate, validateGraphicData, defaultGraphicData, scenesNeedingMedia,
-  buildScenePrompts, buildMissingAssets, buildPromptPack, promptPackMarkdown
+  GRAPHIC_TEMPLATES, NO_DATA_TEMPLATE, graphicTemplates, isGraphicTemplate, TOOL_PROFILES, toolProfiles, profileFor,
+  isTypographic, suggestTemplate, validateGraphicData, defaultGraphicData, normaliseTemplates, normaliseBoard, templateNote,
+  scenesNeedingMedia, buildScenePrompts, buildMissingAssets, buildPromptPack, promptPackMarkdown
 };

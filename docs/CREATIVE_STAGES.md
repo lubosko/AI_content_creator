@@ -123,6 +123,14 @@ stage engine, so they are archived, invalidate what depended on them and reset t
 approval. A preview is deliberately outside that engine and changes nothing. See
 [Scene rendering](SCENE_RENDERING.md).
 
+**The storyboard is asked to supply a template's data in the same response that names it**, and the
+prompt states the condition rather than leaving it to judgement: a chart only when the scene contains
+at least two named figures, a diagram only when it describes steps, and `text-card` otherwise. "A
+benchmark scene" is not the same question as "does this scene contain two figures?", and answering the
+first one is what produced charts with nothing to plot. The prompt is a request, not a guarantee, so
+the plan is checked as it is written and any template the scene cannot fill is resolved there — see
+[Templates are checked before they are approved](SCENE_RENDERING.md#templates-are-checked-before-they-are-approved-not-when-they-are-drawn).
+
 ## Delivering the video
 
 Composing and exporting are gated rather than sequential by convention: the composer's QC report must

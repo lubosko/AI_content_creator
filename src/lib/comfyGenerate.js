@@ -10,6 +10,7 @@ const path = require('node:path');
 const {createHash, randomUUID} = require('node:crypto');
 const comfy = require('../providers/comfy');
 const comfyWorkflows = require('./comfyWorkflows');
+const sceneAssets = require('./sceneAssets');
 
 const JOBS_FILE = 'generated/comfy_jobs.json';
 const TERMINAL = comfy.TERMINAL;
@@ -108,12 +109,25 @@ async function submitGeneration({ctx, client, projectsRoot, sceneId, workflowNam
   if (scene.graphic_template) {
     fail('This scene is assigned the ' + scene.graphic_template + ' template, which the app draws for free. Clear that first if you want to generate instead.', 409);
   }
+  /* A scene whose picture is mostly on-screen words goes to the workflow the operator marked for
+     text, when one is configured. Spelling is the one thing a prompt cannot fix after the fact, and
+     the model that draws a chart beautifully is usually not the one that spells a product name
+     correctly. */
+  const routedForText = !workflowName && sceneAssets.isTypographic(scene)
+    ? comfyWorkflows.textWorkflowName(projectsRoot)
+    : null;
   const built = comfyWorkflows.buildSubmission({
     projectsRoot,
-    name: workflowName,
+    name: workflowName || routedForText || undefined,
     prompt: prompt === undefined || prompt === null || String(prompt).trim() === '' ? scene.generation_prompt : prompt
   });
+  const record = await submit({ctx, client, built, scene, purpose: 'scene', routedForText: !!routedForText});
+  return record;
+}
 
+/* Shared tail of every submission: forward the key if the workflow declares API nodes, submit once
+   with a single-use idempotency key, and record the job so a reload still finds it. */
+async function submit({ctx, client, built, scene, purpose, routedForText}) {
   // Partner/API nodes are a declared property of the workflow, not something guessed from node class
   // names: the app cannot reliably tell an API node from a custom one, and guessing would either
   // withhold a key the workflow needs or send one it does not.
@@ -133,6 +147,8 @@ async function submitGeneration({ctx, client, projectsRoot, sceneId, workflowNam
     scene_id: scene.id,
     scene_title: scene.title || null,
     workflow: built.name,
+    purpose: purpose || 'scene',
+    routed_for_text: !!routedForText,
     output_kind: built.entry.output,
     prompt: built.prompt,
     prompt_fingerprint: promptFingerprint(built.prompt),
@@ -148,13 +164,115 @@ async function submitGeneration({ctx, client, projectsRoot, sceneId, workflowNam
   return record;
 }
 
+/* ---------- the text probe ---------- */
+
+/* Whether a workflow can spell is not something anyone can read off a specification, and this app
+   cannot look at a picture and check. So the operator is given one cheap way to find out with the
+   workflow they actually configured: generate a single image whose subject is the scene's own
+   on-screen words, then say whether the words came out right. The answer is remembered. */
+const PROBES_FILE = 'generated/text_probes.json';
+
+/* The words a probe tests. Only text the scene actually puts on screen: a scene title is not drawn
+   into the picture, so testing it would answer a question about words that never appear. */
+function probeWords(scene) {
+  return String((scene && scene.on_screen_text) || '').trim();
+}
+
+function probePrompt(scene) {
+  const words = probeWords(scene);
+  return 'A clean, evenly lit studio photograph of a large white card held flat and square to the '
+    + 'camera. The card carries crisp black sans-serif lettering that reads exactly: "' + words + '". '
+    + 'Every word is complete, correctly spelled, and entirely inside the frame. No other text anywhere '
+    + 'in the image.';
+}
+
+function readProbes(directory) {
+  const file = path.join(directory, PROBES_FILE);
+  if (!fs.existsSync(file)) return {probes: []};
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return data && Array.isArray(data.probes) ? data : {probes: []};
+  } catch (error) { return {probes: []}; }
+}
+
+function writeProbes(directory, data) {
+  const file = path.join(directory, PROBES_FILE);
+  fs.mkdirSync(path.dirname(file), {recursive: true});
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+
+/* Submits a probe. It deliberately ignores what the scene is assigned: the subject is the workflow,
+   and a probe changes nothing about the plan. */
+async function submitTextProbe({ctx, client, projectsRoot, sceneId, workflowName}) {
+  const board = readBoard(ctx.directory);
+  const scene = board.scenes.find(item => item.id === sceneId);
+  if (!scene) fail('Unknown scene "' + sceneId + '". Reload the storyboard and try again.', 404);
+  const words = probeWords(scene);
+  if (!words) fail('This scene has no on-screen text, so there are no words to test the workflow with.', 409);
+  /* Tested against the workflow this scene would actually be drawn by, or the answer would be about
+     a model the words would never reach. */
+  const routedForText = !workflowName && sceneAssets.isTypographic(scene)
+    ? comfyWorkflows.textWorkflowName(projectsRoot)
+    : null;
+  const built = comfyWorkflows.buildSubmission({
+    projectsRoot,
+    name: workflowName || routedForText || undefined,
+    prompt: probePrompt(scene)
+  });
+  const record = await submit({ctx, client, built, scene, purpose: 'probe', routedForText: !!routedForText});
+  const data = readProbes(ctx.directory);
+  data.probes.push({
+    probe_id: record.job_id,
+    scene_id: scene.id,
+    workflow: built.name,
+    words,
+    job_id: record.job_id,
+    asset_id: null,
+    verdict: null,
+    judged_at: null,
+    tested_at: record.submitted_at
+  });
+  writeProbes(ctx.directory, data);
+  return record;
+}
+
+/* The operator's answer about one probe. Recorded against the workflow, because that is what the
+   answer is about: the next scene on this workflow inherits the finding, not just this one. */
+function recordProbeVerdict(directory, probeId, correct, note) {
+  const data = readProbes(directory);
+  const probe = data.probes.find(item => item.probe_id === probeId);
+  if (!probe) fail('That text probe is not recorded on this project.', 404);
+  probe.verdict = correct ? 'correct' : 'incorrect';
+  probe.note = note ? String(note).slice(0, 500) : null;
+  probe.judged_at = new Date().toISOString();
+  writeProbes(directory, data);
+  return probe;
+}
+
+/* What is known about a workflow's spelling, from the probes run on this project. Null when nobody
+   has ever tested it, which is different from a test that failed. */
+function textProbeVerdict(directory, workflowName) {
+  const judged = readProbes(directory).probes
+    .filter(item => item.verdict && (!workflowName || item.workflow === workflowName))
+    .sort((left, right) => String(right.judged_at).localeCompare(String(left.judged_at)));
+  return judged.length ? judged[0] : null;
+}
+
+/* The most recent probe for a scene, whatever its verdict, so the screen can show the picture that
+   was produced rather than only the conclusion drawn from it. */
+function probeForScene(directory, sceneId) {
+  const probes = readProbes(directory).probes.filter(item => item.scene_id === sceneId);
+  return probes.length ? probes[probes.length - 1] : null;
+}
+
 function readBoard(directory) {
   const file = path.join(directory, 'storyboard/storyboard.json');
   if (!fs.existsSync(file)) fail('Generate the storyboard first, then fill its scenes.', 409);
   let board;
   try { board = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { fail('The storyboard file could not be read: ' + error.message, 409); }
   if (!board || !Array.isArray(board.scenes) || !board.scenes.length) fail('The storyboard has no scenes to fill.', 409);
-  return board;
+  // The same rule every other reader applies, so generation sees the plan the drawing stage will use.
+  return sceneAssets.normaliseBoard(board).board;
 }
 
 /* The same read for callers that report state rather than act on it: a missing storyboard is a fact
@@ -164,7 +282,8 @@ function readBoardOrNull(directory) {
   if (!fs.existsSync(file)) return null;
   try {
     const board = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return board && Array.isArray(board.scenes) ? board : null;
+    if (!board || !Array.isArray(board.scenes)) return null;
+    return sceneAssets.normaliseBoard(board).board;
   } catch (error) { return null; }
 }
 
@@ -174,7 +293,11 @@ function readBoardOrNull(directory) {
 async function pollGeneration({directory, client, jobId, library, attach}) {
   const record = findJob(directory, jobId);
   if (!record) fail('That generation job is not recorded on this project. Submit it again.', 404);
-  if (record.imported_asset_id) return {record, attached_asset_id: record.imported_asset_id, done: true};
+  /* A probe is never attached to a scene, so `attached_asset_id` stays null for one. Reporting the
+     probe's own asset id as an attachment would make the screen offer to detach media the scene
+     never had. */
+  const isProbe = record.purpose === 'probe';
+  if (record.imported_asset_id) return {record, imported_asset_id: record.imported_asset_id, attached_asset_id: isProbe ? null : record.imported_asset_id, done: true};
 
   const snapshot = await client.job(jobId);
   const status = String((snapshot && snapshot.status) || 'unknown');
@@ -199,8 +322,10 @@ async function pollGeneration({directory, client, jobId, library, attach}) {
   }
   const bytes = await client.outputBytes(picked.output);
   const resolved = resolveMediaType(picked.output.content_type);
+  const safeScene = String(record.scene_id).replace(/[^a-z0-9_-]+/gi, '_');
+  const safeWorkflow = String(record.workflow).replace(/[^a-z0-9_-]+/gi, '_');
   const asset = library.importBytes({
-    name: 'comfy-' + String(record.scene_id).replace(/[^a-z0-9_-]+/gi, '_') + resolved.extension,
+    name: (isProbe ? 'text-probe-' + safeWorkflow + '-' : 'comfy-') + safeScene + resolved.extension,
     category: 'media',
     mime: resolved.mime,
     bytes
@@ -208,9 +333,18 @@ async function pollGeneration({directory, client, jobId, library, attach}) {
   library.setRights(asset.id, {
     basis: 'generated',
     holder: 'Comfy Cloud',
-    note: 'Workflow "' + record.workflow + '", prompt ' + record.prompt_fingerprint + '.'
+    note: (isProbe ? 'Text probe of workflow "' : 'Workflow "') + record.workflow + '", prompt ' + record.prompt_fingerprint + '.'
   });
-  await attach(asset.id, 'Comfy Cloud workflow "' + record.workflow + '" (prompt ' + record.prompt_fingerprint + ')');
+  /* A probe is evidence about the workflow, not content for the plan. It is kept where it can be
+     looked at, but it is never attached to the scene whose words it borrowed: testing a workflow must
+     not quietly change what a scene is made of. */
+  if (isProbe) {
+    const probes = readProbes(directory);
+    const entry = probes.probes.find(item => item.probe_id === record.job_id);
+    if (entry) { entry.asset_id = asset.id; writeProbes(directory, probes); }
+  } else {
+    await attach(asset.id, 'Comfy Cloud workflow "' + record.workflow + '" (prompt ' + record.prompt_fingerprint + ')');
+  }
   return {
     record: updateJob(directory, jobId, {
       status, progress, imported_asset_id: asset.id,
@@ -218,7 +352,8 @@ async function pollGeneration({directory, client, jobId, library, attach}) {
       skipped_outputs: (picked.skipped || []).map(item => ({name: item.name || null, type: item.type || null})),
       error: null
     }),
-    attached_asset_id: asset.id,
+    attached_asset_id: isProbe ? null : asset.id,
+    imported_asset_id: asset.id,
     done: true
   };
 }
@@ -251,5 +386,7 @@ function sceneGenerationState(directory, sceneId) {
 module.exports = {
   JOBS_FILE, EXTENSIONS, jobsPath, readJobs, writeJobs, findJob, jobsForScene, activeJobForScene,
   promptFingerprint, resolveMediaType, fileNameFor, submitGeneration, pollGeneration, cancelGeneration,
-  sceneGenerationState, readBoard, readBoardOrNull
+  sceneGenerationState, readBoard, readBoardOrNull,
+  submitTextProbe, probePrompt, probeWords, readProbes, recordProbeVerdict, textProbeVerdict, probeForScene,
+  PROBES_FILE
 };

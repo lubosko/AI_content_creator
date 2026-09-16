@@ -243,7 +243,10 @@ function readStoryboard(ctx) {
   if (!board || !Array.isArray(board.scenes) || !board.scenes.length) {
     failWith('Generate the storyboard first, then fill its scenes.', 409);
   }
-  return board;
+  /* A template nothing can fill is resolved on read, so the plan the editor rewrites is already the
+     plan the drawing stage will honour. Because sceneEditor writes the board back, the first edit
+     anyone makes persists the tidy; until then every reader applies the same rule to the same file. */
+  return sceneAssets.normaliseBoard(board).board;
 }
 
 function sceneProviderFor(ctx) {
@@ -287,6 +290,11 @@ async function assignGraphic({projectsRoot, folder, sceneId, template, data, lib
       const cleared = scene.graphic_template;
       delete scene.graphic_template;
       delete scene.graphic_data;
+      delete scene.template_source;
+      delete scene.template_auto;
+      delete scene.template_from;
+      delete scene.template_reason;
+      delete scene.template_derived;
       return {scene_id: scene.id, artifact: {graphic_cleared: cleared, needs_data: false}};
     }
     if (!sceneAssets.isGraphicTemplate(template)) {
@@ -301,6 +309,15 @@ async function assignGraphic({projectsRoot, folder, sceneId, template, data, lib
     const merged = Object.assign({}, derived.data, {options: derived.options}, supplied);
     scene.graphic_template = template;
     scene.graphic_data = merged;
+    /* The operator's choice is theirs, incomplete data and all: assigning the template first and
+       filling the figures in second is a legitimate order, and the toast below already says what is
+       still missing. Marking the source is what stops an automatic fallback from quietly replacing a
+       decision someone made on purpose. */
+    scene.template_source = 'operator';
+    delete scene.template_auto;
+    delete scene.template_from;
+    delete scene.template_reason;
+    delete scene.template_derived;
     const problem = sceneAssets.validateGraphicData(template, merged);
     return {scene_id: scene.id, artifact: {graphic_template: template, needs_data: !!problem, data_problem: problem || null}};
   };
@@ -628,6 +645,17 @@ async function runFinalCheck({projectsRoot, folder, tools, execFileSync: run = e
           detail: 'The title comes from the brief and the metadata is assembled, not written for you.'},
         {id: 'captions_proofread', mode: 'manual', label: 'You have checked the captions read correctly', ok: null,
           detail: 'Caption wording comes from the script; the timing is estimated from the audio length.'},
+        /* Listed only when there is something to look at, and named with the actual words, because
+           "check the generated text" is not something anyone can act on without knowing which words.
+           This is the one thing in the pipeline nothing here can verify: the app cannot read text out
+           of a picture, and the models that draw them render words from memory rather than by
+           spelling them. */
+        ...((manifest && manifest.generated_text_unverified) || []).length ? [{
+          id: 'generated_text', mode: 'manual', ok: null,
+          label: 'You have checked the words in ' + manifest.generated_text_unverified.length + ' generated scene(s)',
+          detail: 'No check here can read text out of a picture, so this is yours to confirm. Look for: '
+            + manifest.generated_text_unverified.map(item => (item.words ? '"' + String(item.words).slice(0, 80) + '"' : item.scene_id)).join('; ') + '.'
+        }] : [],
         {id: 'rights_confirmed', mode: 'manual', label: 'You are content that every source may be used as it is', ok: null,
           detail: 'The rights gate encodes the licences it knows. It cannot verify a claim made by someone else.'}
       ];

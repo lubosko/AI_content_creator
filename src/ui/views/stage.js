@@ -332,14 +332,20 @@
 
     var narration = manifest.narration || {};
     var counts = manifest.counts || {};
-    wrap.append(C.metrics([
+    var metrics = [
       {label: 'Narration sections', value: String(narration.produced || 0), numeric: true, note: (narration.total_seconds ? narration.total_seconds.toFixed(1) + 's of audio' : 'no audio')},
       {label: 'Your media', value: String(counts.own_media || 0), numeric: true, note: 'includes generated'},
       {label: 'Drawn locally', value: String(counts.rendered || 0), numeric: true},
       {label: 'Sourced', value: String(counts.produced || 0), numeric: true},
       {label: 'Needs media', value: String(counts.still_missing || 0), numeric: true},
       {label: 'Rights blocked', value: String(counts.rights_blocked || 0), numeric: true, note: (counts.rights_blocked ? 'cannot be rendered' : 'all clear')}
-    ]));
+    ];
+    /* Only shown when it applies. A zero here would read as a check that passed, and nothing checked
+       this: the app cannot read words out of a generated picture. */
+    if (counts.generated_text_unverified) {
+      metrics.push({label: 'Unverified text', value: String(counts.generated_text_unverified), numeric: true, note: 'generated, nobody has read it'});
+    }
+    wrap.append(C.metrics(metrics));
     wrap.append(C.banner(manifest.status === 'complete' ? 'ok' : 'warn',
       manifest.status === 'complete' ? 'Every scene has media and the narration is ready' : 'This project is not ready to compose',
       manifest.status === 'complete' ? 'The composer has real media and audio to work with.' : 'Scenes without media would render as blank frames, and scenes with unrecorded rights cannot be rendered at all, so composition stays blocked until each is resolved.'));
@@ -541,6 +547,18 @@
         };
       }
       if (scene.graphic_template) {
+        /* A template the app substituted because the assigned one could not be filled says so, and
+           names what it replaced. Shown as a note rather than as a problem: the scene renders, and
+           the picker below changes it back in one click. */
+        if (scene.template_auto) {
+          return {
+            id: 'drawn', label: 'Drawn locally', tone: 'review',
+            note: 'Drawn locally as ' + scene.graphic_template + '. '
+              + (scene.template_from || 'The assigned template') + ' could not be filled: '
+              + (scene.template_reason || 'its data was missing')
+              + ' The scene renders from its own words. Give it real figures below to get that picture back.'
+          };
+        }
         return { id: 'drawn', label: 'Drawn locally', tone: 'info', note: 'Drawn locally as ' + scene.graphic_template + ', which is free and spells your words exactly.' };
       }
       return { id: 'needs', label: 'Needs media', tone: 'review', note: 'Nothing is chosen for this scene yet. Pick one of the three ways below.' };
@@ -649,8 +667,16 @@
          than about Comfy, so it is shown whatever state the provider is in. */
       var entry = promptsById[scene.id] || {};
       if (entry.typographic) {
+        /* This used to say a generator "will misspell these words", which was a claim the app could
+           not support and could not check. It is now what is actually known: models this size render
+           words from what they have seen rather than by spelling them, technical names are the worst
+           case, and nothing here can read the picture back to see whether it worked. */
         node.append(C.banner('warn', 'Mostly on-screen text',
-          'A video generator will misspell these words or invent ones that are not in your script. Drawing it locally spells them exactly.'));
+          'Comfy renders these words as pixels, not as spelling: a model reproduces text it has seen '
+          + 'before, so an unusual name like "Dora-rs" or "LeRobot" can come out misspelled or invented. '
+          + 'This app has no way to read the words back out of a generated picture, so it cannot check '
+          + 'the result for you. Drawing it locally spells them exactly. Test the workflow below if you '
+          + 'want to find out how it does with these specific words.'));
       }
       if (!comfy) {
         node.append(el('p', { class: 'metric-note', text: 'Checking the Comfy configuration...' }));
@@ -666,15 +692,26 @@
           comfy.workflow_problem || 'Export your ComfyUI workflow with Workflow then Export (API) and save it beside workflows.json.'));
         return { node: node };
       }
+
+      /* The text probe is offered before the scene's own path is considered, because it is a question
+         about the workflow rather than about this scene: a scene drawn locally can still be the source
+         of the words worth testing. Every return below carries its onShow, or a panel that returns
+         early would show the probe and never load it. */
+      var probe = textProbeBlock(scene);
+      if (probe) node.append(probe.node);
+      function withProbe() {
+        return { node: node, onShow: function () { if (probe) probe.onShow(); } };
+      }
+
       if (scene.asset_id) {
         node.append(C.banner('info', 'This scene already uses your own media',
           'Detach it first if you want to generate a replacement. Use a file has the detach control.'));
-        return { node: node };
+        return withProbe();
       }
       if (scene.graphic_template) {
         node.append(C.banner('info', 'This scene is drawn locally',
           'It is assigned the ' + scene.graphic_template + ' template, which is free. Clear that in Draw locally first if you want to generate instead.'));
-        return { node: node };
+        return withProbe();
       }
 
       var statusLine = el('p', { class: 'metric-note', text: 'Checking this scene...' });
@@ -779,6 +816,118 @@
       return {
         node: node,
         // Mounted when you open this path, so a fourteen-scene screen makes one request, not fourteen.
+        onShow: function () {
+          if (probe) probe.onShow();
+          if (mounted) return;
+          mounted = true;
+          activeWatchers.push(stopWatching);
+          load();
+        }
+      };
+    }
+
+    /* One question the app cannot answer for itself: can the workflow you configured actually spell
+       these words? It cannot read a picture back, so it asks you, once, with a single cheap image
+       whose subject is the scene's own on-screen text. The answer is remembered against the workflow,
+       because that is what it is about - every other scene on the same workflow inherits it. */
+    function textProbeBlock(scene) {
+      // Only text the scene actually puts on screen: a title is not drawn into the picture.
+      var words = String(scene.on_screen_text || '').trim();
+      if (!words) return null;
+      var node = el('div', { class: 'stack tight', attrs: { 'data-panel': 'probe' } });
+      var summary = el('p', { class: 'metric-note', text: 'Nobody has tested this workflow on words like these yet.' });
+      var holder = el('div', { class: 'stack tight' });
+      var state = null;
+      var mounted = false;
+      var timer = null;
+      var stopped = false;
+      var watching = null;
+      function stopWatching() { stopped = true; if (timer) { clearTimeout(timer); timer = null; } }
+
+      function paint() {
+        C.clear(holder);
+        var last = state && state.probe ? state.probe : null;
+        var known = state && state.verdict ? state.verdict : null;
+        if (known && known.judged_at) {
+          summary.textContent = known.verdict === 'correct'
+            ? 'You tested workflow "' + known.workflow + '" on ' + String(known.judged_at).slice(0, 10) + ': the words came out correctly.'
+            : 'You tested workflow "' + known.workflow + '" on ' + String(known.judged_at).slice(0, 10) + ': the words did not come out correctly. Drawing locally spells them exactly.';
+        } else {
+          summary.textContent = 'Nobody has tested this workflow on words like these yet.';
+        }
+        if (watching) {
+          holder.append(el('p', { class: 'metric-note', text: 'Generating a test image with ' + watching.workflow + ': ' + root.Stages.label(watching.status) + '.' }));
+          return;
+        }
+        if (last && last.asset_id) {
+          holder.append(el('img', { class: 'asset-preview', src: root.Api.fileUrl(last.asset_id), attrs: { alt: 'Text probe for ' + words, loading: 'lazy' } }));
+          if (last.verdict) {
+            holder.append(el('p', { class: 'metric-note', text: (last.verdict === 'correct' ? 'You judged these words correct.' : 'You judged these words incorrect.') + ' Tested with "' + last.workflow + '".' }));
+          } else {
+            holder.append(el('p', { class: 'metric-note', text: 'Look at the image: are these words spelled correctly? Your answer is remembered for this workflow.' }));
+            var yes = button('The words are correct', { size: 'sm', on: function () { judge(yes, true); } });
+            var no = button('The words are wrong', { size: 'sm', on: function () { judge(no, false); } });
+            holder.append(el('div', { class: 'row' }, [yes, no]));
+          }
+        } else if (last && last.failed) {
+          holder.append(C.banner('warn', 'The test image was not produced', 'The generation did not succeed, so nothing was learned about spelling. Try again, or draw the scene locally.'));
+        }
+        var run = button('Generate a test image', { size: 'sm', on: function () {
+          run.setBusy(true, 'Submitting');
+          ctx.api.textProbe(folder, scene.id, {}).then(function (result) {
+            watching = { job_id: result.job.job_id, workflow: result.job.workflow, status: result.job.status };
+            C.toast('Test image submitted. It costs one Comfy run.');
+            paint();
+            watch(result.job.job_id);
+          }).catch(function (error) { C.toast(error.message, 'error'); }).finally(function () { run.setBusy(false); });
+        } });
+        holder.append(el('div', { class: 'row' }, [run]));
+        holder.append(el('p', { class: 'metric-note', text: 'One image, sent to the workflow above. It is kept in the library and is never attached to this scene.' }));
+      }
+
+      function judge(control, correct) {
+        if (!state || !state.probe) return;
+        control.setBusy(true, 'Saving');
+        ctx.api.textProbeVerdict(folder, state.probe.probe_id, { spelled_correctly: correct }).then(function () {
+          C.toast(correct ? 'Recorded: this workflow spells these words correctly.' : 'Recorded: this workflow does not spell these words correctly.');
+          return load();
+        }).catch(function (error) { C.toast(error.message, 'error'); }).finally(function () { control.setBusy(false); });
+      }
+
+      function watch(jobId) {
+        if (stopped) return;
+        ctx.api.generationStatus(folder, scene.id, jobId).then(function (result) {
+          if (stopped) return;
+          var job = result.job || {};
+          if (result.done) {
+            watching = null;
+            if (job.status === 'failed' || job.error) C.toast(job.error || 'The test image failed.', 'error');
+            return load();
+          }
+          watching = { job_id: jobId, workflow: job.workflow, status: job.status };
+          paint();
+          timer = setTimeout(function () { watch(jobId); }, 4000);
+        }).catch(function (error) {
+          if (stopped) return;
+          watching = null;
+          summary.textContent = error.message;
+          paint();
+        });
+      }
+
+      function load() {
+        return ctx.api.sceneGeneration(folder, scene.id).then(function (result) {
+          state = result.text_probe || null;
+          paint();
+        }).catch(function (error) { summary.textContent = error.message; });
+      }
+
+      node.append(C.panel('Can this workflow spell these words?', {
+        subtitle: 'The app cannot read a generated picture, so it cannot check. This asks you once, with the words this scene actually puts on screen.',
+        children: el('div', { class: 'stack tight' }, [summary, holder])
+      }));
+      return {
+        node: node,
         onShow: function () {
           if (mounted) return;
           mounted = true;

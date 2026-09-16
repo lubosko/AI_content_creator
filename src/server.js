@@ -317,6 +317,8 @@ function createServer(options = {}) {
       base_url: baseUrl,
       workflows: configured.workflows,
       default_workflow: configured.default || null,
+      // The workflow that scenes made of on-screen words are sent to, when one was marked for text.
+      text_workflow: configured.text_workflow || null,
       // A missing or broken workflows.json is the operator's next step, so it travels with the status.
       workflow_problem: configured.problem,
       workflow_config_path: configured.path
@@ -652,6 +654,11 @@ function createServer(options = {}) {
           sendJson(response, 200, {
             folder, scene_id: sceneId,
             generation: comfyGenerate.sceneGenerationState(ctx.directory, sceneId),
+            // What is known about this workflow's spelling, from probes already run on this project.
+            text_probe: {
+              probe: comfyGenerate.probeForScene(ctx.directory, sceneId),
+              verdict: comfyGenerate.textProbeVerdict(ctx.directory, null)
+            },
             comfy: comfyStatus()
           });
           return;
@@ -696,7 +703,17 @@ function createServer(options = {}) {
           }
           const files = RESULT_FILES[resultMatch[2]].map((relativePath) => {
             const filePath = path.join(path.dirname(projectPath), relativePath);
-            return { path: relativePath, content: fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : null };
+            const raw = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : null;
+            /* The storyboard is normalised on the way out, so the screen shows the plan the drawing
+               stage will actually honour. Without this the two could disagree: the file would still
+               name a template nothing can fill while production drew a text card from the words. */
+            if (raw && relativePath === "storyboard/storyboard.json") {
+              try {
+                const healed = sceneAssets.normaliseBoard(JSON.parse(raw));
+                if (healed.changes.length) return { path: relativePath, content: JSON.stringify(healed.board, null, 2), normalised: healed.changes };
+              } catch (error) { /* an unreadable board is reported as it is, by the stage that reads it */ }
+            }
+            return { path: relativePath, content: raw };
           });
           sendJson(response, 200, { files });
           return;
@@ -813,6 +830,38 @@ function createServer(options = {}) {
             prompt: body.prompt
           });
           sendJson(response, 201, {folder, scene_id: sceneId, job: record});
+          return;
+        }
+
+        /* One image whose subject is the scene's own on-screen words, so the operator can find out
+           whether the workflow they configured can actually spell them. It changes nothing in the
+           plan: the result is kept in the library and never attached to a scene. */
+        const probeMatch = requestUrl.pathname.match(/^\/api\/projects\/([^/]+)\/scenes\/([^/]+)\/text-probe$/u);
+        if (probeMatch) {
+          const folder = decodeURIComponent(probeMatch[1]);
+          const sceneId = decodeURIComponent(probeMatch[2]);
+          const body = await readRequestJson(request);
+          const ctx = intake.context(projectsRoot, folder);
+          intake.requireIntake(ctx);
+          const record = await comfyGenerate.submitTextProbe({
+            ctx, client: comfyClient(), projectsRoot, sceneId,
+            workflowName: body.workflow
+          });
+          sendJson(response, 201, {folder, scene_id: sceneId, job: record});
+          return;
+        }
+
+        const probeVerdictMatch = requestUrl.pathname.match(/^\/api\/projects\/([^/]+)\/text-probe\/([^/]+)\/verdict$/u);
+        if (probeVerdictMatch) {
+          const folder = decodeURIComponent(probeVerdictMatch[1]);
+          const ctx = intake.context(projectsRoot, folder);
+          intake.requireIntake(ctx);
+          const body = await readRequestJson(request);
+          if (typeof body.spelled_correctly !== 'boolean') {
+            intake.fail('Say whether the words came out correctly, as spelled_correctly: true or false.', 400);
+          }
+          const probe = comfyGenerate.recordProbeVerdict(ctx.directory, decodeURIComponent(probeVerdictMatch[2]), body.spelled_correctly, body.note);
+          sendJson(response, 200, {folder, probe});
           return;
         }
 

@@ -46,6 +46,34 @@ is `own`. An unchanged drawing from a previous run is reused rather than redrawn
 signature recorded in `generated/graphics/render_manifest.json`. See
 [Scene rendering](SCENE_RENDERING.md).
 
+A template whose data the scene does not contain never reaches this stage. It is resolved when the
+plan is written — derived if the scene's own words allow it, otherwise replaced by a text card and
+recorded as such — so **the asset stage cannot fail a scene for missing template data**. If it ever
+reports *"A bar chart needs data.bars with at least two entries"*, that means someone assigned the
+template by hand and has not filled it in yet, which the storyboard already told them.
+
+## Generated scenes and their text
+
+A scene filled by Comfy Cloud is imported as `generated` — your own work, cleared by the rights gate.
+One thing about it is not checked and cannot be: **words visible in the picture**. This app has no OCR,
+and diffusion models render text as pixels reproduced from training data rather than by spelling, which
+fails worst on exactly the strings a technical video is full of — product names, acronyms, unusual
+casing.
+
+So the manifest carries the fact rather than a verdict:
+
+- `generated_text_unverified: true` on any generated scene whose `on_screen_text` is not empty, with
+  `generated_text_words` naming them.
+- `counts.generated_text_unverified`, and a top-level `generated_text_unverified` list of
+  `{scene_id, title, words}`.
+- A warning that says so in plain words, and a manual item in the
+  [final check](RUN_TO_FINAL_CHECK.md) that asks you to confirm you looked at those words — named, so
+  the question is answerable.
+
+A scene you shot yourself is never flagged: it carries no generated text. To find out whether a
+workflow can spell at all before committing to it, see the text probe in
+[Comfy generation](COMFY_GENERATION.md).
+
 ## Produced footage
 
 Scenes that selected no own media are filled from the free-licence sources in
@@ -98,6 +126,8 @@ Asset production never reports success it did not achieve.
 - The manifest status is `complete` only when every scene has media, no narration section failed, and
   no scene's rights are blocked. Otherwise it is `incomplete`, and the interface says composition
   stays blocked.
+- **Words in a generated picture are recorded as unverified rather than assumed correct**, with the
+  words named and a confirmation at the final check. See *Generated scenes and their text* above.
 
 ## What is not implemented
 

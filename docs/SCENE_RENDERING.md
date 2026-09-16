@@ -70,6 +70,34 @@ ordinary headline to a third of its size.
 An empty `eyebrow` or `footnote` is hidden after the build, because an empty element still
 contributes its margin and pushes the real content off centre.
 
+## Templates are checked before they are approved, not when they are drawn
+
+A template whose data the scene does not contain used to survive the whole storyboard, get approved,
+and only fail when the scene was finally drawn — asking the operator to type figures the model never
+had, minutes or days after the plan was agreed. It is now resolved while the scene's own words are
+still in hand, by one pure function that every reader of the board applies (`normaliseTemplates`):
+
+1. **Derive.** Data is derived from the scene itself and merged *under* whatever the model supplied, so
+   supplied values always win. A diagram whose steps are already written as `a -> b -> c` fills itself.
+2. **Substitute.** If nothing can honestly be derived, the scene falls back to `text-card`, which draws
+   the scene's own on-screen words and needs no data at all. Nothing is invented: an empty chart is
+   never filled with plausible numbers, because a chart of made-up figures in a technical explainer is
+   worse than no chart.
+3. **Record.** A substitution writes `template_from`, `template_reason` and `template_auto` onto the
+   scene, and the storyboard says so: *Drawn locally as text-card. bar-chart could not be filled: A bar
+   chart needs data.bars with at least two entries.* It is a note, not a problem — the scene renders,
+   and the template picker changes it back in one click.
+
+**A template the operator assigned by hand is never touched.** Assigning a template and filling its
+data in afterwards is a legitimate order, the interface already says what is still missing, and a
+decision someone made on purpose must not be quietly replaced. `scene.template_source` records which
+of the two it was.
+
+The function is pure and idempotent, so it is applied in one place per reader — when the storyboard is
+parsed, when the plan is edited, when media is generated, when the pipeline plans a run, and on the way
+out to the browser — and they all agree. A project whose storyboard predates this heals on read: no
+regeneration, no provider call, no re-approval.
+
 ## Assigning, previewing and producing
 
 - **Assignment** is a plan change. It goes through the stage engine, so it is archived under

@@ -255,14 +255,20 @@ function parseStoryboard(modelText, options) {
       on_screen_text: text(scene && scene.on_screen_text),
       generation_prompt: text(scene && scene.generation_prompt),
       graphic_template: graphicTemplate,
+      // Who chose it, so an automatic fallback can never overwrite the operator's own decision.
+      template_source: graphicTemplate ? 'provider' : null,
       graphic_data: graphicTemplate && scene.graphic_data && typeof scene.graphic_data === 'object' && !Array.isArray(scene.graphic_data) ? scene.graphic_data : null,
       transition: text(scene && scene.transition)
     };
   }).filter(scene => scene.title || scene.visual_intent);
 
   if (!scenes.length) fail('The storyboard result has no scenes. Nothing was saved.');
-  const total = seconds(value.total_duration_seconds, scenes.reduce((sum, scene) => sum + scene.seconds, 0));
-  return {scenes, total, rejectedAssets, rejectedTemplates};
+  /* A template the model assigned but left no data for is resolved here, at the moment the plan is
+     written, rather than being carried into the asset stage where it would fail. A scene drawn from
+     its own words is a finished scene; a scene waiting for figures nobody has is not. */
+  const normalised = sceneAssets.normaliseTemplates(scenes);
+  const total = seconds(value.total_duration_seconds, normalised.scenes.reduce((sum, scene) => sum + scene.seconds, 0));
+  return {scenes: normalised.scenes, total, rejectedAssets, rejectedTemplates, templateChanges: normalised.changes};
 }
 
 function storyboardMarkdown(parsed, assetsById) {
@@ -276,7 +282,9 @@ function storyboardMarkdown(parsed, assetsById) {
     if (scene.visual_intent) lines.push('Visual intent: ' + scene.visual_intent);
     if (scene.shot_type) lines.push('Shot: ' + scene.shot_type);
     lines.push('Own media: ' + (asset ? asset.name : 'none selected — needs to be produced or found'));
-    if (scene.graphic_template) lines.push('Drawn locally: ' + scene.graphic_template + (scene.graphic_data ? ' (data supplied)' : ' (needs data)'));
+    const note = sceneAssets.templateNote(scene);
+    if (note) lines.push(note);
+    else if (scene.graphic_template) lines.push('Drawn locally: ' + scene.graphic_template + (scene.graphic_data ? ' (data supplied)' : ' (needs data)'));
     if (scene.on_screen_text) lines.push('On screen text: ' + scene.on_screen_text);
     if (scene.transition) lines.push('Transition: ' + scene.transition);
     if (!scene.asset_id && scene.generation_prompt) lines.push('Generation prompt: ' + scene.generation_prompt);
@@ -303,6 +311,10 @@ async function storyboard({brief, script, assets, provider, sceneProvider, block
   const warnings = [];
   if (parsed.rejectedAssets.length) warnings.push('The model named ' + parsed.rejectedAssets.length + ' asset id(s) that do not exist. Those scenes were treated as missing assets rather than trusted.');
   if (parsed.rejectedTemplates && parsed.rejectedTemplates.length) warnings.push('The model named ' + parsed.rejectedTemplates.length + ' graphic template(s) this app does not have. Those scenes were left without one.');
+  /* A substituted template is reported rather than done quietly: the scene still renders, but it is
+     not the picture the model asked for, and the operator may want to give it real figures. */
+  const substitutions = (parsed.templateChanges || []).filter(item => item.kind === 'substituted');
+  if (substitutions.length) warnings.push(substitutions.length + ' scene(s) named a template whose data the scene itself did not contain, so they were drawn as ' + sceneAssets.NO_DATA_TEMPLATE + ' from their own words: ' + substitutions.map(item => item.scene_id + ' (' + item.from + ')').join(', ') + '. Give a scene real figures to get its chart back.');
   if (!catalogue.length) warnings.push('No own media was available, so every scene needs a new asset.');
   if (withheld.length) warnings.push(withheld.length + ' own media item(s) were withheld from this storyboard because their rights are not cleared. Record the licence for each, then generate the storyboard again to use them.');
 
@@ -334,6 +346,7 @@ async function storyboard({brief, script, assets, provider, sceneProvider, block
       selected_assets: parsed.scenes.filter(scene => scene.asset_id).length,
       rejected_asset_ids: parsed.rejectedAssets.length,
       rejected_templates: (parsed.rejectedTemplates || []).length,
+      template_substitutions: substitutions.length,
       typographic_scenes: pack.summary.typographic,
       withheld_assets: withheld.length,
       total_duration_seconds: parsed.total,
@@ -432,7 +445,10 @@ async function drawGraphicScene({scene, index, graphicsDir, asProjectPath, drawS
    the operator both know exactly what exists. */
 async function production({script, storyboard: board, audioDir, videoDir, projectDirectory, speech, stock, rightsOf, assetOf, tools, execFileSync: run, onProgress, renderGraphic, graphicFps, previousRenders}) {
   const sections = (script && script.sections) || [];
-  const scenes = (board && board.scenes) || [];
+  /* A board written before templates were checked can still carry a template nothing can fill. It is
+     resolved here as well as when the plan is written, so an existing project is healed without
+     regenerating the storyboard and paying for it twice. */
+  const scenes = sceneAssets.normaliseTemplates((board && board.scenes) || []).scenes;
   const anchor = path.resolve(projectDirectory || path.dirname(videoDir));
   const asProjectPath = filePath => path.relative(anchor, filePath).split(path.sep).join('/');
   const graphicsDir = path.join(path.dirname(videoDir), 'graphics');
@@ -514,13 +530,20 @@ async function production({script, storyboard: board, audioDir, videoDir, projec
       const asset = assetOf ? assetOf(scene.asset_id) : null;
       const analysis = (asset && asset.analysis) || {};
       const media = analysis.media || {};
+      const origin = rights && rights.basis === 'generated' ? 'generated' : 'own';
+      /* A generated picture for a scene that is mostly on-screen words carries text nobody has read
+         back. The app has no way to read it, so it records the fact rather than assuming the model
+         spelled correctly - and the final check asks the operator to look. */
+      const textUnverified = origin === 'generated' && sceneAssets.isTypographic(scene);
       return {
         scene_id: scene.id,
         title: scene.title,
         seconds: scene.seconds,
         status: 'own_media',
         asset_id: scene.asset_id,
-        origin: rights && rights.basis === 'generated' ? 'generated' : 'own',
+        origin,
+        generated_text_unverified: textUnverified,
+        generated_text_words: textUnverified ? String(scene.on_screen_text || '').trim() || null : null,
         // What the composer needs to place this clip, so it never has to resolve the library itself.
         media: asset ? {
           kind: mediaKind(asset),
@@ -572,6 +595,14 @@ async function production({script, storyboard: board, audioDir, videoDir, projec
   for (const scene of withMedia) scene.rights_state = verdicts.get(scene.scene_id) || null;
 
   const warnings = [];
+  /* Generated on-screen text is the one thing in this pipeline nobody can check automatically, so it
+     is named here and listed for the final check rather than passing as though it were verified. */
+  const unverifiedText = scenesWithMedia.filter(scene => scene.generated_text_unverified);
+  if (unverifiedText.length) {
+    warnings.push(unverifiedText.length + ' generated scene(s) carry on-screen words nobody has checked: '
+      + unverifiedText.map(scene => scene.scene_id).join(', ')
+      + '. This app cannot read text out of a picture. Look at those scenes before you publish, or draw them locally, which spells the words exactly.');
+  }
   if (!speech) warnings.push('Narration was not produced: no speech provider is configured.');
   if (narration.failed) warnings.push(narration.failed + ' narration section(s) failed.');
   if (narration.empty) warnings.push(narration.empty + ' script section(s) have no narration text.');
@@ -601,10 +632,14 @@ async function production({script, storyboard: board, audioDir, videoDir, projec
       produced: producedCount,
       rendered: renderedCount,
       generated_external: generatedCount,
+      generated_text_unverified: unverifiedText.length,
       still_missing: stillMissing,
       rights_blocked: gate.summary.blocked,
       total_scenes: scenes.length
     },
+    /* Named with their words, so the check is "does this picture say Dora-rs correctly?" rather than
+       "review the generated scenes". */
+    generated_text_unverified: unverifiedText.map(scene => ({scene_id: scene.scene_id, title: scene.title, words: scene.generated_text_words})),
     warnings
   };
 
@@ -645,6 +680,7 @@ async function production({script, storyboard: board, audioDir, videoDir, projec
       scenes_produced: producedCount,
       scenes_rendered: renderedCount,
       scenes_generated_external: generatedCount,
+      scenes_with_unverified_text: unverifiedText.length,
       scenes_still_missing: stillMissing,
       rights_blocked: gate.summary.blocked,
       attributions: gate.attributions.length,

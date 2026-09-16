@@ -18,6 +18,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const sceneAssets = require('./sceneAssets');
 
 const RUN_FILE = 'generated/pipeline_run.json';
 const STEP_IDS = ['generate', 'assets', 'compose', 'final'];
@@ -75,9 +76,14 @@ function preflight(ctx) {
   return {ok: problems.length === 0, problems};
 }
 
-/* Scenes the assets stage still has to fill: no own media, and no local template to draw. */
+/* Scenes the assets stage still has to fill: no own media, and no local template to draw. The board
+   is normalised first, so a scene whose template could not be filled is counted as drawn rather than
+   silently skipped here and failed later during production. */
+function boardScenes(board) {
+  return sceneAssets.normaliseBoard(board).board.scenes;
+}
 function scenesNeedingMedia(board) {
-  return ((board && board.scenes) || []).filter(scene => !scene.asset_id && !scene.graphic_template);
+  return boardScenes(board).filter(scene => !scene.asset_id && !scene.graphic_template);
 }
 
 /* The subset worth sending to a generator: it also needs a prompt to send. */

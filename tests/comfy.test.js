@@ -61,7 +61,10 @@ function mockComfy(state) {
       }
       state.submittedWorkflow = JSON.parse(options.body).workflow;
       state.idempotencyKeys.push(options.headers['idempotency-key']);
-      return Response.json({id: 'job-1', status: 'queued', progress: null, outputs: [], error: null, urls: {}}, {status: 201});
+      /* Each submission gets its own id. Returning one id for every job would make the second
+         submission overwrite the first in any lookup by id, which hides real routing bugs. */
+      state.submitCount = (state.submitCount || 0) + 1;
+      return Response.json({id: 'job-' + state.submitCount, status: 'queued', progress: null, outputs: [], error: null, urls: {}}, {status: 201});
     }
     if (/\/api\/v2\/jobs\/[^/]+$/.test(target)) {
       const step = state.statuses.shift();
@@ -478,6 +481,109 @@ async function testErrorsAndRefusals() {
   console.log('  errors: documented codes mapped, real node detail kept, and every refusal specific');
 }
 
+/* A scene whose picture is mostly on-screen words is sent to the workflow the operator marked for
+   text, and the app offers one cheap way to find out whether that workflow can actually spell. */
+async function testTextRoutingAndProbe() {
+  const state = newState({
+    statuses: [
+      succeeded([{node_id: '9', name: 'probe.png', type: 'image', content_type: 'image/png', size_bytes: PNG.length, id: 'asset-9', hash: null, url: 'https://cloud.comfy.org/probe.png', url_expires_at: '2030-01-01T00:00:00Z'}])
+    ]
+  });
+  await withServer(state, async ({baseUrl, projectsRoot}) => {
+    const {folder, directory} = await buildProject(baseUrl, projectsRoot);
+    writeJson(path.join(projectsRoot, '_settings/comfy/workflows.json'), {
+      version: 1,
+      default: 'image',
+      workflows: {
+        image: {file: 'image.workflow.json', output: 'image', prompt_node: '6', prompt_field: 'text'},
+        typography: {file: 'typography.workflow.json', output: 'image', purpose: 'text', prompt_node: '6', prompt_field: 'text'}
+      }
+    });
+    writeJson(path.join(projectsRoot, '_settings/comfy/typography.workflow.json'), API_WORKFLOW);
+
+    const boardFile = path.join(directory, 'storyboard/storyboard.json');
+    const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+    board.scenes.push({
+      id: 'scene_text', title: 'Warning label', narration_section_id: 'hook', seconds: 6,
+      visual_intent: 'A warning label', asset_id: null, shot_type: 'graphic',
+      on_screen_text: 'Dora-rs: read the manual before you install', generation_prompt: 'a warning label', transition: ''
+    });
+    fs.writeFileSync(boardFile, JSON.stringify(board, null, 2));
+
+    const status = await api(baseUrl, '/api/providers/comfy');
+    assert.equal(status.payload.text_workflow, 'typography', 'The status must name the workflow marked for text');
+    assert.equal(status.payload.default_workflow, 'image');
+    assert.equal(status.payload.workflows.find(item => item.name === 'typography').purpose, 'text');
+    assert.equal(status.payload.workflows.find(item => item.name === 'image').purpose, 'general', 'An unmarked workflow is general');
+
+    // Words on screen, so it goes to the text workflow without being asked.
+    const routed = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_text/generate', {});
+    assert.equal(routed.status, 201, JSON.stringify(routed.payload).slice(0, 200));
+    assert.equal(routed.payload.job.workflow, 'typography');
+    assert.equal(routed.payload.job.routed_for_text, true);
+
+    // No words on screen, so it goes to the default.
+    const plain = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_one/generate', {});
+    assert.equal(plain.payload.job.workflow, 'image');
+    assert.equal(plain.payload.job.routed_for_text, false);
+
+    // Naming a workflow is the operator overriding that, and it wins.
+    const explicit = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_text/generate', {workflow: 'image'});
+    assert.equal(explicit.payload.job.workflow, 'image');
+    assert.equal(explicit.payload.job.routed_for_text, false, 'An explicit choice must not be reported as routing');
+
+    /* --- the probe --- */
+    const probe = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_text/text-probe', {});
+    assert.equal(probe.status, 201, JSON.stringify(probe.payload).slice(0, 200));
+    assert.equal(probe.payload.job.purpose, 'probe');
+    const probePrompt = state.submittedWorkflow['6'].inputs.text;
+    assert.match(probePrompt, /read the manual before you install/, 'The probe must ask for the scene\'s own words');
+    assert.match(probePrompt, /reads exactly/, 'and must ask for them exactly');
+
+    const probeId = probe.payload.job.job_id;
+    const polled = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_text/generate/' + probeId);
+    assert.equal(polled.payload.done, true);
+    assert.equal(polled.payload.attached_asset_id, null, 'A probe must never be attached to the scene');
+    assert.ok(polled.payload.job.imported_asset_id, 'but the picture is kept so it can be looked at');
+
+    const afterProbe = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+    assert.equal(afterProbe.scenes.find(scene => scene.id === 'scene_text').asset_id, null, 'A probe must change nothing about the plan');
+
+    // A second poll must not import it twice, and must still not look like an attachment.
+    const again = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_text/generate/' + probeId);
+    assert.equal(again.payload.attached_asset_id, null);
+
+    const beforeVerdict = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_text/generation');
+    assert.equal(beforeVerdict.payload.text_probe.probe.verdict, null, 'Nobody has judged it yet');
+    assert.ok(beforeVerdict.payload.text_probe.probe.asset_id, 'The picture is shown back for judging');
+
+    const bad = await api(baseUrl, '/api/projects/' + folder + '/text-probe/' + probeId + '/verdict', {});
+    assert.equal(bad.status, 400, 'A verdict has to say what it decided');
+    assert.match(bad.payload.error, /spelled_correctly/);
+
+    const verdict = await api(baseUrl, '/api/projects/' + folder + '/text-probe/' + probeId + '/verdict', {spelled_correctly: false, note: 'Dora-rs came out as Dora-rsx'});
+    assert.equal(verdict.status, 200, JSON.stringify(verdict.payload).slice(0, 200));
+    assert.equal(verdict.payload.probe.verdict, 'incorrect');
+
+    /* Remembered against the workflow, because that is what the answer is about: the next scene on
+       the same workflow inherits it rather than having to ask again. */
+    const remembered = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_text/generation');
+    assert.equal(remembered.payload.text_probe.verdict.verdict, 'incorrect');
+    assert.equal(remembered.payload.text_probe.verdict.workflow, 'typography');
+    assert.equal(remembered.payload.text_probe.probe.verdict, 'incorrect', 'and the scene\'s own probe carries it too');
+
+    const missingProbe = await api(baseUrl, '/api/projects/' + folder + '/text-probe/nope/verdict', {spelled_correctly: true});
+    assert.equal(missingProbe.status, 404);
+
+    // A scene with no words has nothing to test the workflow with.
+    const wordless = await api(baseUrl, '/api/projects/' + folder + '/scenes/scene_one/text-probe', {});
+    assert.equal(wordless.status, 409);
+    assert.match(wordless.payload.error, /no on-screen text/);
+
+    console.log('  text: purpose routing to the marked workflow, an explicit choice winning, and a probe that is kept but never attached');
+  });
+}
+
 async function testConnectionTest() {
   const good = newState({statuses: []});
   const goodFetch = mockComfy(good);
@@ -505,8 +611,9 @@ async function run() {
   await testGenerationRoundTrip();
   await testRedirectSafety();
   await testErrorsAndRefusals();
+  await testTextRoutingAndProbe();
   await testConnectionTest();
-  console.log('All Comfy generation tests passed: adapter, workflow config, per-scene routes, redirect safety and error mapping (mock network, no paid runs).');
+  console.log('All Comfy generation tests passed: adapter, workflow config, per-scene routes, text routing and probing, redirect safety and error mapping (mock network, no paid runs).');
 }
 
 run().catch(error => { console.error(error); process.exitCode = 1; });

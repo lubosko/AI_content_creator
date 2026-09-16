@@ -64,6 +64,8 @@ rather than risk writing your prompt into the wrong node:
 
 - `prompt_field` defaults to `text`.
 - `output` is `image` or `video`, and decides which media output is kept.
+- `purpose` is `general` (the default) or `text`. Mark the workflow you trust to render words legibly
+  as `text` and scenes that are mostly on-screen words are sent there automatically — see below.
 - `output_node` picks one output when a workflow saves several. Otherwise the first media output wins
   and the rest are recorded as skipped.
 - `uses_api_nodes` must be `true` for a workflow containing partner/API nodes. It is **declared, not
@@ -79,6 +81,54 @@ not configured and names the path it is looking for, rather than offering a gene
 deliver.
 
 Nothing here rewrites your file. The prompt is injected into a copy in memory.
+
+## Words on screen
+
+Diffusion models do not spell. They render text as pixels, reproduced from what the model saw during
+training, and the failure mode is worst on exactly the strings a technical video is full of: product
+names, acronyms and unusual casing — `Dora-rs`, `LeRobot`, `ROS2`. The first human-evaluation
+benchmark for on-screen text in video models ([T2VTextBench](https://arxiv.org/abs/2505.04946))
+put ten leading systems below 0.4 out of 1, and found the pattern behind it: models memorise text at
+the *word* level, so they do well on a single common word and degrade sharply on sentences and on
+arbitrary character sequences. A general image model asked for a chart is usually worse still.
+
+Three things follow, and the app does all three.
+
+**1. A workflow can be marked for text.** If your image model is a photorealism model — Z-Image Turbo
+and most "turbo" variants are — it is the wrong tool for a scene whose picture is the words. Add a
+workflow built on a model known for typography (Qwen-Image is the usual choice among open models):
+
+```json
+{
+  "version": 1,
+  "default": "image",
+  "workflows": {
+    "image":      { "file": "image.workflow.json", "output": "image", "prompt_node": "67" },
+    "typography": { "file": "typography.workflow.json", "output": "image", "purpose": "text", "prompt_node": "6" }
+  }
+}
+```
+
+A scene the app flags as mostly on-screen text is then submitted to `typography` without being asked.
+Naming a workflow in the scene panel still overrides it. A workflow marked `text` whose file is missing
+is ignored rather than used, so a broken entry cannot turn a working generation into a refusal.
+
+**2. The app will not pretend it checked.** It cannot read text back out of a picture — there is no OCR
+anywhere in it — so a generated scene that puts words on screen is recorded as
+`generated_text_unverified` in the asset manifest, with the words named, and the final check asks you
+to confirm you looked at them. It is a confirmation you make, never a silent pass.
+
+**3. There is one cheap way to find out.** The generate panel for a scene with on-screen text offers
+**Generate a test image**. It submits one image whose subject is that scene's own words, sent to the
+same workflow the scene would use, and shows you the result. You answer "the words are correct" or
+"the words are wrong", and the answer is remembered **against the workflow** — a judgement is about
+the model, not about one scene, so every later scene on the same workflow inherits it.
+
+The test image is imported into the library so you can look at it and keep it. It is **never attached
+to the scene**: finding out whether a workflow can spell must not change what a scene is made of.
+
+Probes are recorded at `generated/text_probes.json`.
+
 
 ## Generating a scene
 
@@ -119,15 +169,18 @@ Job records live at `generated/comfy_jobs.json` per project.
 - **A generated clip shorter than its scene is looped** by the composer to fill it, which is visible.
   Generate at the scene length or longer.
 - **A generated clip longer than its scene is trimmed.**
-- **Text-bearing scenes are a poor fit.** A generator misspells on-screen words; the prompt pack flags
-  those scenes and points at the local templates instead.
+- **Text-bearing scenes are a poor fit** unless you mark a text-oriented workflow. The app routes them,
+  records the result as unverified, and offers a probe — but it cannot read the picture, so the final
+  judgement about spelling is yours.
 
 ## Validation
 
 `tests/comfy.test.js` mocks the network at the `providerFetch` seam and asserts the adapter, the
 config loader, the per-scene routes and the error mapping — including that the asset-content call is
 issued with `redirect: 'manual'` so the API key is never forwarded to the signed-URL host. The happy
-path imports a real PNG and attaches it, and a repeated poll is asserted not to import twice.
+path imports a real PNG and attaches it, and a repeated poll is asserted not to import twice. Text
+routing is covered end to end: a scene made of words reaches the workflow marked `text`, an explicit
+choice overrides it, and a probe is imported but never attached.
 
 `tests/ui-pipeline.test.js` drives the scene control and a full run through the real views in the fake
 DOM. **No test performs real HTTP and no test can spend credits.**

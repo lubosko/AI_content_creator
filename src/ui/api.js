@@ -75,6 +75,10 @@
     sceneGeneration: function (folder, sceneId) { return request('/api/projects/' + encode(folder) + '/scenes/' + encode(sceneId) + '/generation'); },
     cancelGeneration: function (folder, sceneId, jobId) { return request('/api/projects/' + encode(folder) + '/scenes/' + encode(sceneId) + '/generate/' + encode(jobId) + '/cancel', { method: 'POST' }); },
     comfyStatus: function () { return request('/api/providers/comfy'); },
+    // One image whose subject is the scene's own on-screen words, to find out whether the workflow
+    // can spell them. It changes nothing in the plan.
+    textProbe: function (folder, sceneId, body) { return request('/api/projects/' + encode(folder) + '/scenes/' + encode(sceneId) + '/text-probe', json(body || {})); },
+    textProbeVerdict: function (folder, probeId, body) { return request('/api/projects/' + encode(folder) + '/text-probe/' + encode(probeId) + '/verdict', json(body || {})); },
     // Run to final check: a project action, not a stage.
     pipeline: function (folder) { return request('/api/projects/' + encode(folder) + '/pipeline'); },
     startPipeline: function (folder, body) { return request('/api/projects/' + encode(folder) + '/pipeline', json(body || {})); },

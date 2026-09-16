@@ -120,9 +120,10 @@ const STORYBOARD_SCHEMA = {
     on_screen_text: 'any text that should appear, or an empty string',
     generation_prompt: 'a precise prompt to create this shot, used when asset_id is null',
     /* A template name lets the app draw this scene itself, which is the right answer whenever the
-       scene is mostly on-screen words: a video generator would misspell them. */
-    graphic_template: 'one of text-card, bar-chart, terminal, diagram, split-compare, end-card, or null to leave it to a generator',
-    graphic_data: 'the data that template needs: bars for bar-chart, nodes and edges for diagram, lines for terminal, left and right for split-compare, next for end-card, otherwise null',
+       scene is mostly on-screen words: a video generator would misspell them. It is only usable when
+       the scene also carries the data that template needs, so the two fields are described together. */
+    graphic_template: 'one of text-card, bar-chart, terminal, diagram, split-compare, end-card, or null to leave it to a generator. Use a template that needs data only when this scene actually contains that data - see the rules below',
+    graphic_data: 'the data that template needs, in the same response: bars for bar-chart, nodes and edges for diagram, lines for terminal, left and right for split-compare, next for end-card, otherwise null. A data-bearing template with empty data here will be replaced by a text card',
     transition: 'how this scene moves to the next, or an empty string'
   }],
   total_duration_seconds: 'integer total across all scenes, close to the brief target'
@@ -158,6 +159,21 @@ function storyboardPrompt({brief, script, assets}) {
       + 'split-compare needs {"left":{"label":"Before","text":"..."},"right":{"label":"After","text":"..."}}. '
       + 'end-card needs {"next":"..."}. text-card needs nothing.'
       + ' Never invent numbers for a chart: use only figures that appear in the approved research or script.'
+      /* A template with no data behind it is a scene that cannot be drawn. The rule is stated as a
+         condition rather than left to judgement, because "a benchmark scene" is not the same question
+         as "does this scene contain two figures?" - and answering the first one produced charts with
+         nothing to plot. */
+      + '\nA template may only be used if the scene itself contains what it needs. '
+      + 'Choose bar-chart only when the scene has at least two figures, each with a name, taken from the '
+      + 'approved research or script - a claim like "up to 20-60x faster", or "roughly equal", is not two '
+      + 'figures and must not become a chart. '
+      + 'Choose diagram only when the scene describes a sequence of at least two steps, which you should '
+      + 'write into on_screen_text joined by " -> ". '
+      + 'Choose terminal only when the scene shows commands. '
+      + 'Choose split-compare only when on_screen_text has two sides separated by " | ". '
+      + 'When a scene is mostly words but has none of those, use text-card, which draws the words exactly. '
+      + 'If you set a template, set the graphic_data it needs in the same response: a template whose data '
+      + 'is empty or missing will be replaced by a text card, and your intended picture will be lost.'
       + (catalogue.length ? '' : '\nNo own media is available for this project, so every scene must have asset_id null and a generation_prompt.')
       + '\n\nApproved brief:\n' + JSON.stringify(briefBlock(brief))
       + '\n\nApproved script:\n' + JSON.stringify({sections: (script && script.sections) || [], estimated_duration_seconds: (script && script.estimated_duration_seconds) || null}).slice(0, 24000)
