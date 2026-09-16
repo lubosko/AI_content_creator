@@ -71,11 +71,13 @@ const MANIFEST = {
 async function run() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-assets-'));
   const projectsRoot = path.join(root, 'projects');
+  /* The live server HAS a Pexels key, while the saved manifest below was produced when it did not.
+     That is the exact situation that made the app look as though it were ignoring a saved key. */
   const server = createServer({
     projectsRoot,
     libraryRoot: path.join(root, 'library'),
     settingsFile: path.join(root, 'settings.json'),
-    env: {},
+    env: {PEXELS_API_KEY: 'live-key-configured-after-this-result-ran'},
     vault: {seal: value => 'sealed:' + value, open: value => String(value).replace(/^sealed:/, '')}
   });
   const base = await listen(server);
@@ -118,7 +120,44 @@ async function run() {
     assert.ok(body.indexOf('A diagram needs data.nodes with at least two entries.') >= 0, 'The real cause of a failed template is shown');
     assert.ok(body.indexOf('No media chosen for this scene yet.') >= 0, 'A scene with no path chosen is waiting, not failed');
 
-    console.log('All assets workspace tests passed: per-source search reasons, one vocabulary, drawn scenes free of licence language, and a missing key not dressed up as a failure.');
+    /* --- a template scene is never told which stock sources were unavailable --- */
+    const rows = Array.prototype.slice.call(ui.document.querySelectorAll('tr'));
+    const diagramRow = rows.filter(row => ui.text(row).indexOf('Definition diagram') >= 0)[0];
+    assert.ok(diagramRow, 'The diagram scene has a row');
+    assert.equal(ui.text(diagramRow).indexOf('Pexels'), -1, 'A diagram that needs data is not also blamed on a stock key it never needed');
+    assert.equal(ui.text(diagramRow).indexOf('not searched'), -1);
+    const sourcedRow = rows.filter(row => ui.text(row).indexOf('Robot arm') >= 0)[0];
+    assert.ok(ui.text(sourcedRow).indexOf('Pexels — not searched') >= 0, 'A scene that was going to be sourced still says which source was skipped');
+
+    /* --- a saved result that predates the key says so, instead of reading as the app ignoring it --- */
+    assert.ok(body.indexOf('Pexels is configured now') >= 0, 'A source that was unavailable when the result ran, and is available now, is named');
+    assert.ok(body.indexOf('Run Assets again to use it.') >= 0, 'The one action that fixes it is stated');
+    assert.equal(body.indexOf('This result is out of date'), -1, 'the banner is titled with the fact, not with a vague warning');
+
+    /* --- and a result that was produced with the key present carries no such banner --- */
+    const honest = Object.assign({}, MANIFEST, {
+      sourcing: {
+        ready: true,
+        sources: [
+          {id: 'pexels', short: 'Pexels', media_kinds: ['video'], reason: null},
+          {id: 'archive', short: 'Archive.org', media_kinds: ['video'], reason: null}
+        ],
+        unavailable: []
+      }
+    });
+    const second = await (await fetch(base + '/api/projects', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({prompt: 'A second video about robot safety.'})})).json();
+    writeJson(path.join(projectsRoot, second.folder, 'generated/asset_manifest.json'), honest);
+    writeJson(path.join(projectsRoot, second.folder, 'generated/audio/narration_plan.json'), {provider: 'openai', sections: []});
+    // A fresh boot opens the second project as its first, so the recorded source list is compared
+    // against the live one without any leftover state from the first project.
+    const secondUi = boot({base});
+    secondUi.navigate('#/project/' + encodeURIComponent(second.folder) + '/assets');
+    await secondUi.settle(() => secondUi.text(secondUi.document.getElementById('viewBody')).indexOf('Where the media came from') >= 0, {description: 'the second assets workspace', timeout: 8000});
+    const current = secondUi.text(secondUi.document.getElementById('viewBody'));
+    assert.equal(current.indexOf('is configured now'), -1, 'A current result is not told it is out of date');
+    assert.ok(current.indexOf('Searched: Pexels (video)') >= 0, 'The source that was used is listed as searched');
+
+    console.log('All assets workspace tests passed: per-source search reasons, one vocabulary, drawn scenes free of licence language, a template not blamed on a stock key, and a stale result named as stale.');
   } finally {
     if (server.closeAllConnections) server.closeAllConnections();
     await close(server);

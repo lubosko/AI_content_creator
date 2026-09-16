@@ -352,6 +352,8 @@
         Api.settings().then(function (data) { Store.patch({ settings: data }); }),
         // The template vocabulary comes from the server so the interface never hard-codes one.
         Api.renderTemplates().then(function (data) { Store.patch({ renderTemplates: data }); }).catch(function () { Store.patch({ renderTemplates: null }); }),
+        // The live media sources, so a saved result can be told apart from a current one.
+        Api.sourcingStatus().then(function (data) { Store.patch({ sourcingStatus: data }); }).catch(function () { Store.patch({ sourcingStatus: null }); }),
         refreshProjects()
       ]);
       var last = Store.lastProject();

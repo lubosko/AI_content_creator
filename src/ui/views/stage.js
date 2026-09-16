@@ -348,6 +348,22 @@
        source is a stated cause, never an unexplained absence of footage. */
     var sourcing = manifest.sourcing;
     if (sourcing) {
+      /* A saved result records what was true when it ran, so it keeps saying "no key configured" long
+         after the key was saved. Left unsaid, that reads as the app ignoring the key. The recorded
+         reason is compared against the live provider list, and a source that has since become usable
+         is named, with the one action that fixes it. */
+      var live = (ctx.store.snapshot().sourcingStatus || {}).sources || [];
+      var liveIds = {};
+      live.forEach(function (item) { liveIds[item.id] = true; });
+      var sinceConfigured = (sourcing.unavailable || []).filter(function (item) { return liveIds[item.id]; });
+      if (sinceConfigured.length) {
+        var names = sinceConfigured.map(function (item) { return item.short; }).join(' and ');
+        var plural = sinceConfigured.length > 1;
+        wrap.append(C.banner('warn', names + (plural ? ' are' : ' is') + ' configured now',
+          'This saved result was produced before ' + (plural ? 'they were' : 'it was') + ' configured, so ' +
+          (plural ? 'they were' : 'it was') + ' never searched. Run Assets again to use ' + (plural ? 'them' : 'it') + '.'));
+      }
+
       var sourcingRows = el('div', { class: 'stack tight' });
       (sourcing.sources || []).forEach(function (item) {
         sourcingRows.append(el('p', { class: 'metric-note', text: 'Searched: ' + item.short + ' (' + (item.media_kinds || []).join(', ') + ')' }));
@@ -439,9 +455,14 @@
         attempts.forEach(function (item) {
           sourceCell.append(el('p', { class: 'metric-note', text: item.short + ' — searched, ' + item.reason }));
         });
-        ((sourcing && sourcing.unavailable) || []).forEach(function (item) {
-          sourceCell.append(el('p', { class: 'metric-note', text: item.short + ' — not searched: ' + item.reason }));
-        });
+        /* Only a scene that was going to be sourced is told which sources were unavailable. A scene
+           with a template never goes near a stock provider, so listing Pexels under a diagram that is
+           missing its data describes a step that was never part of this scene. */
+        if (!scene.template) {
+          ((sourcing && sourcing.unavailable) || []).forEach(function (item) {
+            sourceCell.append(el('p', { class: 'metric-note', text: item.short + ' — not searched: ' + item.reason }));
+          });
+        }
         if (!attempts.length && scene.reason) sourceCell.append(el('p', { class: 'metric-note', text: scene.reason }));
         if (scene.query) sourceCell.append(el('p', { class: 'metric-note mono', text: 'Searched for: ' + scene.query }));
       }

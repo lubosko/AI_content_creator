@@ -64,6 +64,8 @@
     researchStatus: function () { return request('/api/providers/research'); },
     testResearch: function () { return request('/api/providers/research/test', { method: 'POST' }); },
     renderTemplates: function () { return request('/api/render/templates'); },
+    // Which media sources are usable right now, so a saved result can be compared against today.
+    sourcingStatus: function () { return request('/api/providers/sourcing'); },
     assignGraphic: function (folder, sceneId, template, data) { return request('/api/projects/' + encode(folder) + '/scene-graphic', json({ scene_id: sceneId, template: template, data: data })); },
     attachSceneAsset: function (folder, sceneId, body) { return request('/api/projects/' + encode(folder) + '/scenes/' + encode(sceneId) + '/asset', json(body)); },
     renderPreview: function (folder, sceneId, body) { return request('/api/projects/' + encode(folder) + '/scenes/' + encode(sceneId) + '/render-preview', json(body || {})); },

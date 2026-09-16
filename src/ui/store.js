@@ -14,6 +14,7 @@
     library: [],
     licences: [],
     renderTemplates: null,
+    sourcingStatus: null,
     maxUploadBytes: 0,
     settings: null,
     results: {},
