@@ -287,7 +287,11 @@ async function testRouteHappyPath() {
     const intake = await api(baseUrl, '/api/projects/' + built.folder + '/intake');
     const masterApproval = intake.payload.project.workflow.approvals.filter(item => item.stage === 'master_video');
     assert.equal(masterApproval.length, 0, 'the master must still be waiting for the operator');
-    assert.equal(intake.payload.project.workflow.stages.compose.state, 'needs_review', 'the composer result waits for review');
+    /* The composer has no approval gate, so its result does not "wait for review" - only the finished
+       video does, at the final check. Resting at `needs_review` put a review badge on a screen that
+       offered no decision, and the approval button it drew returned 404. */
+    assert.equal(intake.payload.project.workflow.stages.compose.state, 'ready', 'a render is a production step, not a gate');
+    assert.equal(intake.payload.project.workflow.stages.final.state, 'needs_review', 'the final check is what waits for the operator');
 
     // A second run is allowed once the first has settled.
     const rerun = await api(baseUrl, '/api/projects/' + built.folder + '/pipeline', {stop_after: 'final_check'});

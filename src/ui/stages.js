@@ -16,13 +16,13 @@
     { id: 'material', title: 'Own material', group: 'setup', route: 'material', kind: 'material',
       summary: 'Import files, add URLs and notes, and choose library items for this project.' },
     { id: 'research', title: 'Research', group: 'setup', route: 'research', kind: 'provider',
-      server: 'research', resultKey: 'research', summary: 'Findings, references and claims to verify.' },
+      server: 'research', resultKey: 'research', approvable: true, summary: 'Findings, references and claims to verify.' },
     { id: 'strategy', title: 'Strategy', group: 'create', route: 'strategy', kind: 'provider',
-      server: 'strategy', resultKey: 'strategy', summary: 'Story promise, angle, structure, retention plan and intended material usage.' },
+      server: 'strategy', resultKey: 'strategy', approvable: true, summary: 'Story promise, angle, structure, retention plan and intended material usage.' },
     { id: 'script', title: 'Script', group: 'create', route: 'script', kind: 'provider',
-      server: 'script', resultKey: 'script', summary: 'Narration grounded in the approved research and strategy, with visual notes and timing.' },
+      server: 'script', resultKey: 'script', approvable: true, summary: 'Narration grounded in the approved research and strategy, with visual notes and timing.' },
     { id: 'storyboard', title: 'Storyboard', group: 'create', route: 'storyboard', kind: 'provider',
-      server: 'storyboard', resultKey: 'storyboard', summary: 'Scene plan that selects your own analyzed media and lists what still has to be produced.' },
+      server: 'storyboard', resultKey: 'storyboard', approvable: true, summary: 'Scene plan that selects your own analyzed media and lists what still has to be produced.' },
     { id: 'assets', title: 'Assets', group: 'produce', route: 'assets', kind: 'provider',
       server: 'assets', resultKey: 'assets', summary: 'Narration and footage for the storyboard gaps, with provenance recorded for each asset.' },
     { id: 'compose', title: 'Composer', group: 'produce', route: 'compose', kind: 'provider',
@@ -38,6 +38,16 @@
   // These routes must be served by src/server.js for generation to work at all.
   var SERVER_ACTIONS = ['research', 'strategy', 'script', 'storyboard', 'assets', 'render', 'final', 'exports'];
   var RESULT_KEYS = ['research', 'strategy', 'script', 'storyboard', 'assets', 'render', 'final', 'exports'];
+
+  /* Stages the server will record an approval for. `assets` and `compose` are production steps, not
+     gates: the interface used to draw approval controls on them anyway and the button returned 404,
+     because `POST /approvals/:stage` does not accept those names. A gate the server does not
+     implement is not a gate. tests/ui.test.js asserts this list against the server's own. */
+  function approvable(stage) {
+    if (!stage) return false;
+    if (stage.approvalStage) return true;
+    return stage.approvable === true;
+  }
 
   // Transient stages the UI must be able to render. Every value here needs a visual treatment.
   var STAGE_STATES = ['locked', 'ready', 'running', 'needs_review', 'approved', 'failed', 'needs_update'];
@@ -71,7 +81,12 @@
       // Every stage is implemented, so there is no "planned" or "template" state left to report. A
       // stage with no saved revision is ready once intake is confirmed, and locked before that.
       if (!record || !record.revision) { out[stage.id] = (briefApproved && materialsApproved) ? 'ready' : 'locked'; continue; }
-      out[stage.id] = record.state || 'ready';
+      var state = record.state || 'ready';
+      /* `needs_review` means a decision is waiting, and a stage with no approval gate has none. A
+         project whose assets stage ran before the server stopped storing that state still carries it,
+         so it is read as what it means here: produced, and current. No rewrite, no re-run. */
+      if (state === 'needs_review' && !approvable(stage)) state = 'ready';
+      out[stage.id] = state;
     }
     return out;
   }
@@ -94,6 +109,6 @@
     GROUPS: GROUPS, STAGES: STAGES, SERVER_ACTIONS: SERVER_ACTIONS,
     RESULT_KEYS: RESULT_KEYS, STAGE_STATES: STAGE_STATES,
     byId: byId, byRoute: byRoute, group: forGroup, indexOf: indexOf,
-    states: states, label: label, tone: tone
+    states: states, label: label, tone: tone, approvable: approvable
   };
 })(window);

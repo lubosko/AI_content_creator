@@ -92,6 +92,33 @@ function run() {
   assert.equal(Stages.byId('final').approvalStage, 'master_video');
   assert.equal(Stages.byId('exports').approvalStage, 'platform_adaptations');
 
+  /* Approval controls may only appear on a stage the server will accept a decision for. They used to
+     be drawn on Assets and Composer too, whose names the approvals route does not accept, so the
+     button came back 404. This is checked against the server's own list rather than a copy of it. */
+  const {APPROVABLE_STAGES} = require('../src/lib/intakeWorkflow');
+  // Array.from, because the UI vocabulary lives in a vm context and its Array is a different realm's:
+  // deepStrictEqual compares prototypes, so a vm array never equals a host array.
+  const approvable = Array.from(Stages.STAGES.filter(stage => Stages.approvable(stage)).map(stage => stage.approvalStage || stage.id));
+  assert.deepEqual(approvable.slice().sort(), APPROVABLE_STAGES.slice().sort(),
+    'Every stage the interface offers to approve must be one the server accepts, and no gate may be missing from the interface: interface ' + approvable.join(',') + ' vs server ' + APPROVABLE_STAGES.join(','));
+  for (const id of ['assets', 'compose']) {
+    assert.equal(Stages.approvable(Stages.byId(id)), false, id + ' is a production step, not an approval gate');
+  }
+  /* A stage with no gate cannot be waiting for a decision, so a stored `needs_review` on one reads as
+     what it means: produced and current. Projects that ran before this still carry the old value. */
+  const legacy = Stages.states({workflow: {brief: {state: 'approved'}, materials: {state: 'approved'}, stages: {assets: {revision: 5, state: 'needs_review'}, render: {revision: 1, state: 'needs_review'}, storyboard: {revision: 2, state: 'needs_review'}}}});
+  assert.equal(legacy.assets, 'ready', 'Assets has no gate, so it cannot be awaiting review');
+  assert.equal(legacy.compose, 'ready', 'Neither has the composer');
+  assert.equal(legacy.storyboard, 'needs_review', 'A stage that does have a gate still asks for review');
+  /* And the approvals route in src/server.js must name them, or the check above would pass while the
+     request still 404s. The path is written escaped (\/approvals\/), so the filter matches the word
+     rather than a plain slash. */
+  const approvalsRoute = serverSource.split('\n').filter(line => line.includes('approvals') && /\((research(?:\|[a-z_]+)+)\)/.test(line));
+  assert.equal(approvalsRoute.length, 1, 'Expected exactly one approvals route in src/server.js, found ' + approvalsRoute.length);
+  const servedGates = approvalsRoute[0].match(/\((research(?:\|[a-z_]+)+)\)/)[1].split('|');
+  assert.deepEqual(servedGates.slice().sort(), APPROVABLE_STAGES.slice().sort(),
+    'The approvals route must serve exactly the stages the server says are approvable, route: ' + servedGates.join(','));
+
   // --- every stage state needs a visual treatment ---
   for (const state of Stages.STAGE_STATES) {
     assert.ok(Stages.tone(state), 'State ' + state + ' has no tone');

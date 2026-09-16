@@ -80,7 +80,11 @@ async function runStage(options) {
   const apply = options.apply || (result && typeof result.apply === 'function' ? result.apply : null);
   if (apply) apply(ctx, result);
   ctx.project.workflow.stages[options.stage].revision++;
-  ctx.project.workflow.stages[options.stage].state = 'needs_review';
+  /* `needs_review` means "a decision is waiting". A stage with no approval gate has no decision to
+     wait for, and leaving it there put a review badge on a screen that offered nothing to review -
+     and, because the interface drew the approval controls anyway, a button that returned 404. Such a
+     stage declares the state it actually rests in. */
+  ctx.project.workflow.stages[options.stage].state = options.state || 'needs_review';
   for (const name of options.invalidates || []) {
     const record = ctx.project.workflow.stages[name];
     if (record) record.state = record.revision ? 'needs_update' : 'locked';

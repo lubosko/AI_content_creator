@@ -60,6 +60,12 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* `hidden` must win. The browser's own rule is `[hidden] { display: none }` in the UA stylesheet,
+   and any author rule that sets `display` beats it - `.stack { display: flex }` did, so all three
+   fill-a-scene panels were laid out at once and the buttons that switch between them changed
+   nothing on screen. This belongs above every layout rule that sets a display value. */
+[hidden] { display: none !important; }
+
 html, body { height: 100%; }
 
 /* Reserve the scrollbar so fixed overlays and the rail keep the same width when it appears. */

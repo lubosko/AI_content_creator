@@ -95,11 +95,38 @@ async function run() {
     await page.waitFor('(function () { var row = ' + aspirationRow + '; return !!row && row.open; })()', 'the card to open when its summary is clicked', 5000);
     const opened = await page.evaluate('var row = ' + aspirationRow + '; return row.getAttribute("data-state");');
     assert.equal(opened, 'needs', 'A scene with nothing chosen reports needing media, in the same words the metric uses');
+
+    /* The three paths must actually be hidden, not merely marked hidden. The attribute is set by the
+       button, and a fake DOM is happy with that - but `[hidden]` is a UA rule, so any author rule
+       setting `display` beats it, and `.stack { display: flex }` did. Every panel was laid out at
+       once and the buttons changed nothing on screen while every test still passed. */
+    const pathVisibility = await page.evaluate([
+      'var row = ' + aspirationRow + ';',
+      'return Array.from(row.querySelectorAll("[data-panel]")).map(function (p) {',
+      '  return {name: p.getAttribute("data-panel"), hidden: p.hidden, display: getComputedStyle(p).display, h: Math.round(p.getBoundingClientRect().height)};',
+      '});'
+    ].join('\n'));
+    for (const panel of pathVisibility) {
+      assert.equal(panel.display, 'none', 'With no path chosen the ' + panel.name + ' panel must not be displayed, computed display was ' + panel.display);
+      assert.equal(panel.h, 0, 'and must take no space on the page, got ' + panel.h + 'px');
+    }
+
     await page.evaluate([
       "var row = Array.from(document.querySelectorAll('.fill-scene')).filter(function (n) { return n.innerText.indexOf('Aspiration') >= 0; })[0];",
       "Array.from(row.querySelectorAll('button')).filter(function (b) { return b.innerText.trim() === 'Draw locally'; })[0].click();",
       "return true;"
     ].join(' '));
+    // Exactly the chosen panel, and only it. Clicking the same path again closes it, so this click
+    // must happen once: a second one flipped the choice back off.
+    const afterPath = await page.evaluate([
+      'var row = ' + aspirationRow + ';',
+      'return Array.from(row.querySelectorAll("[data-panel]")).map(function (p) {',
+      '  return {name: p.getAttribute("data-panel"), display: getComputedStyle(p).display};',
+      '});'
+    ].join('\n'));
+    const shown = afterPath.filter(panel => panel.display !== 'none').map(panel => panel.name);
+    assert.deepEqual(shown, ['local'], 'Choosing a path must show that panel and only that one, showed: ' + JSON.stringify(shown));
+
     await page.evaluate([
       "var row = Array.from(document.querySelectorAll('.fill-scene')).filter(function (n) { return n.innerText.indexOf('Aspiration') >= 0; })[0];",
       "Array.from(row.querySelectorAll('button')).filter(function (b) { return b.innerText.trim() === 'Render preview'; })[0].click();",

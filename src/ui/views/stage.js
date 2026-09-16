@@ -60,6 +60,11 @@
   function approvalPanel(ctx, stageId, record, saved) {
     if (!record || !record.revision) return null;
     var stage = root.Stages.byId(stageId) || {};
+    /* Only a stage the server will accept a decision for gets approval controls. Producing assets and
+       rendering the video are steps, not gates - there is no decision attached to either - and the
+       controls used to be drawn on both anyway, so pressing Approve hit a route that does not accept
+       those stage names and came back 404. */
+    if (!root.Stages.approvable(stage)) return null;
     var gate = stage.approvalStage || null;
     var project = ctx.store.project();
     var decision = gate && root.Delivery ? root.Delivery.gateDecision(project, gate) : null;

@@ -44,6 +44,32 @@ A stage refuses to run without its inputs:
 - Script needs saved strategy.
 - Storyboard needs a saved script with sections, because scenes reference script section ids.
 
+## Which stages have a gate
+
+Six do, and the server's list is the only authority: `research`, `strategy`, `script`, `storyboard`,
+`master_video` and `platform_adaptations`. The last two are the video gates, reached from the Final
+check and Exports screens.
+
+**Assets and Composer have no gate.** They are production steps: there is no decision attached to
+having produced narration and footage, or to having rendered a file. The video is what gets reviewed,
+and it is reviewed once, at the final check against the master video gate.
+
+This was wrong in two directions until it was fixed. The interface drew approval controls on both
+screens anyway, and pressing *Approve* posted to `/approvals/assets` — a stage name the approvals
+route does not accept, so it came back **404 "Request failed with status 404."** And a stage with no
+gate was left resting at `needs_review`, which means "a decision is waiting", so the rail showed a
+review badge for a decision nobody could make.
+
+Now: a stage the server cannot decide does not offer the controls (`Stages.approvable`), production
+steps rest at `ready` rather than `needs_review`, and `tests/ui.test.js` asserts the interface's
+approvable set, the server's list and the approvals route all agree — so a gate can never be offered
+that the server will not accept.
+
+> `AGREED_WORKFLOW.md` lists asset production as "review and approve assets", which never reached the
+> implementation. If that gate is wanted, it is a small addition — `assets` joins the server's
+> approvable list and the stage's `approvable` flag — but it is a decision about the workflow, not a
+> bug that was waiting to be fixed.
+
 ## The storyboard
 
 The storyboard is where your own footage enters the plan. The director is given a catalogue of the

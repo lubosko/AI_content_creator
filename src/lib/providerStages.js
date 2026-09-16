@@ -174,6 +174,9 @@ async function generateAssets({projectsRoot, folder, library, speech, stock, ren
   return runStage({
     stage: 'assets', label: 'Asset production', projectsRoot, folder,
     status: 'assets_ready',
+    // Producing assets is not an approval gate: there is no decision attached to it, so it must not
+    // sit at `needs_review` claiming one is waiting. The review that matters is the finished video.
+    state: 'ready',
     invalidates: ['compose', 'final'],
     call: async (ctx) => {
       const script = readJsonIfPresent(path.join(ctx.directory, 'script/script.json'));
@@ -470,6 +473,9 @@ function placeholderRenderer(options = {}) {
 async function composeProject({projectsRoot, folder, library, tools, options, onProgress, renderPlaceholder}) {
   return runStage({
     stage: 'compose', label: 'Composer', projectsRoot, folder,
+    // A render is not an approval gate either. QC decides whether the video *may* be approved, and
+    // that decision is made on the final check against the master video gate.
+    state: 'ready',
     // No `status` option: the engine would apply it after `apply`, overwriting the QC verdict, and
     // the verdict is the point. The status is qc_passed or qc_failed, set below.
     invalidates: ['final'],

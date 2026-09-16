@@ -46,11 +46,15 @@
 
   async function openProject(folder) {
     if (!folder) return;
-    if (Store.snapshot().folder && Store.snapshot().folder !== folder) Store.patch({ results: {}, errors: {} });
+    if (Store.snapshot().folder && Store.snapshot().folder !== folder) Store.patch({ results: {}, errors: {}, resultsAttempted: {} });
     Store.patch({ loading: true });
     try {
       var payload = await Api.intake(folder);
-      Store.patch({ folder: folder, intake: payload, brief: payload.brief, loading: false, results: {}, errors: {} });
+      /* `resultsAttempted` is cleared with the results it describes. Leaving it set meant a result
+         loaded a moment before the project was (re)opened had been thrown away, while the guard
+         still believed it had been asked for - so the stage showed "No saved result loaded" for
+         good, and only a full page reload brought it back. */
+      Store.patch({ folder: folder, intake: payload, brief: payload.brief, loading: false, results: {}, errors: {}, resultsAttempted: {} });
       Store.rememberLast(folder);
       await refreshLibrary();
     } catch (error) {
