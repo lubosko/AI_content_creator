@@ -134,7 +134,15 @@
 
     // The approval cannot proceed while a blocking check stands, or before the manual items are ticked.
     var blocked = !!(check && (check.blocking_issues || []).length);
-    if (gate === 'master_video' && manual.length) {
+    /* The verdict, the confirmations and the approval are all pinned to the exact video the check
+       inspected. When the composer has run since, that check belongs to the previous cut: offering the
+       button anyway sent the operator into a refusal that told them to reload, which changes nothing.
+       The check has to be run again against the current video. */
+    if (gate === 'master_video' && record.state === 'needs_update') {
+      gateNotice = C.banner('warn', 'This check is out of date',
+        'The video was rendered again after this check ran, so its verdict and its confirmations belong to the previous cut. Run the final check again against the current video, then approve it.');
+      approveBtn.disabled = true;
+    } else if (gate === 'master_video' && manual.length) {
       approveBtn.disabled = blocked;
       var list = el('div', { class: 'stack tight' });
       manual.forEach(function (item) {

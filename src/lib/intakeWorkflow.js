@@ -78,7 +78,10 @@ function requireMasterApprovable(ctx, body) {
   const subject = masterSubject(ctx.project);
   if (!subject) fail('No composed video is recorded on this project. Compose the video first.', 409);
   if (body.subject !== undefined && body.subject !== subject) {
-    fail('The video changed since you reviewed it. Reload and watch the current version before approving.', 409);
+    /* Reloading cannot help here, and telling the operator to had them reload for nothing: the
+       approval is pinned to the video the check inspected, so a re-render means the check has to be
+       run again against the current cut. */
+    fail('The video was rendered again after that check ran, so the check belongs to the previous cut. Run the final check again against the current video, then approve it.', 409);
   }
   const check = readJsonIfPresent(path.join(ctx.directory, 'final/final_check.json'));
   if (!check) fail('Run the final check before approving the video.', 409);

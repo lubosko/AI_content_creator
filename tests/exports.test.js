@@ -182,7 +182,10 @@ async function run() {
 
     const wrongSubject = await approve({decision: 'approved', revision, stage_revision: composeRevision, confirmed: manual.map(item => item.id), subject: 'compose:99:1:1'});
     assert.equal(wrongSubject.status, 409, 'an approval for a different video must be refused');
-    assert.match(wrongSubject.payload.error, /changed since you reviewed it/);
+    /* The refusal must name the action that works. It used to say "reload and watch the current
+       version", and reloading changes nothing: the check itself belongs to the earlier cut. */
+    assert.match(wrongSubject.payload.error, /Run the final check again/);
+    assert.equal(/reload/i.test(wrongSubject.payload.error), false, 'reloading cannot fix this, so it must not be the advice');
 
     const changedState = await api(baseUrl, '/api/projects/' + folder + '/intake');
     const approved = await approve({decision: 'approved', revision: changedState.payload.project.workflow.revision, stage_revision: composeRevision, confirmed: manual.map(item => item.id), subject: check.subject});
